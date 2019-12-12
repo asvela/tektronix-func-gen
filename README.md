@@ -2,7 +2,7 @@
 
 v0.1.0 // Dec 2019
 
-API documentation available [in docs/index.html](https://asvela.github.io/tektronix-func-gen/). (To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
+API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
 
 ## Installation
@@ -45,7 +45,7 @@ More examples are included at the end of the module.
 
 ### Impedance
 
-Unfortunately the impedance (50 or high Z) cannot be controlled or read remotely. Which setting is in use affects the limits of the output voltage. Use the optional impedance keyword in the initialisation of the func_gen object to make the object aware what limits applies: `func_gen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.
+Unfortunately the impedance (50Ω or high Z) cannot be controlled or read remotely. Which setting is in use affects the limits of the output voltage. Use the optional impedance keyword in the initialisation of the func_gen object to make the object aware what limits applies: `func_gen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.
 
 
 ### Syncronisation and frequency lock
@@ -62,20 +62,21 @@ The length of the waveform must be between 2 and 8192 points.
 import numpy as np
 import tektronix_func_gen as tfg
 with tfg.func_gen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+      # create waveform
       x = np.linspace(0, 4*np.pi, 8000)
       waveform = np.sin(x)+x/5
-      print("Current waveform catalogue")
-      for i, wav in enumerate(fgen.get_waveform_catalogue()): print("  {}: {}".format(i, wav))
-      # transfer the waveform
+      # transfer the waveform (normalises to the vertical waveform range)
       fgen.set_custom_waveform(waveform, memory_num=5, verify=True)
+      # done, but let's have a look at the waveform catalogue ..
       print("New waveform catalogue:")
       for i, wav in enumerate(fgen.get_waveform_catalogue()): print("  {}: {}".format(i, wav))
-      print("Set new wavefrom to channel {}..".format(channel), end=" ")
-      fgen.channels[channel-1].set_output("OFF")
-      fgen.channels[channel-1].set_function("USER5")
+      # .. and set the waveform to channel 1
+      print("Set new wavefrom to channel 1..", end=" ")
+      fgen.ch1.set_output("OFF")
+      fgen.ch1.set_function("USER5")
       print("ok")
       # print current settings
-      fgen.get_settings()
+      fgen.print_settings()
 ```
 
 
