@@ -2,7 +2,7 @@
 
 v0.1.0 // Dec 2019
 
-API documentation available [in docs/tektronix_func_gen.html](docs/tektronix_func_gen.html). (To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
+API documentation available [in docs/index.html](https://asvela.github.io/tektronix-func-gen/). (To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
 
 ## Installation
