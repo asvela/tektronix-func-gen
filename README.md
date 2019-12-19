@@ -1,6 +1,6 @@
 # Tektronix arbitrary function generator control through PyVISA
 
-v0.1.0 // Dec 2019
+v0.2.0 // Dec 2019
 
 API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
@@ -10,18 +10,21 @@ API documentation can be found at [GitHub pages](https://asvela.github.io/tektro
 Put the module file in the folder wherein the file you will import it from resides.
 
 
-## Usage
+## Usage (through examples)
 
-An example:
+An example of basic control
 
 ```python
 import tektronix_func_gen as tfg
 
-with tfg.func_gen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
       fgen.ch1.set_function("SIN")
       fgen.ch1.set_frequency(25, unit="Hz")
+      fgen.ch1.set_offset(50, unit="mV")
+      fgen.ch1.set_amplitude(0.002)
       fgen.ch1.set_output("ON")
       fgen.ch2.set_output("OFF")
+      # alternatively fgen.ch1.print_settings() to show from one channel only
       fgen.print_settings()
 ```
 
@@ -37,20 +40,42 @@ Current settings for TEKTRONIX AFG1022 XXXXX
    output ON    OFF    
  function SIN   RAMP  
 amplitude 0.002 1     Vpp
-   offset 0.0   -0.45 V
+   offset 0.05  -0.45 V
 frequency 25.0  10.0  Hz
 ```
 
-More examples are included at the end of the module.
+Settings can also be stored and restored:
 
-### Impedance
-
-Unfortunately the impedance (50Ω or high Z) cannot be controlled or read remotely. Which setting is in use affects the limits of the output voltage. Use the optional impedance keyword in the initialisation of the func_gen object to make the object aware what limits applies: `func_gen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.
+```python
+"""Example showing how to connect, get the current settings of
+the instrument, store them, change a setting and then restore the
+initial settings"""
+import tektronix_func_gen as tfg
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+    fgen.print_settings()
+    print("Saving these settings..")
+    settings = fgen.get_settings()
+    print("Change to 1Vpp amplitude for channel 1..")
+    fgen.ch1.set_amplitude(1)
+    fgen.print_settings()
+    print("Reset back to initial settings..")
+    fgen.set_settings(settings)
+    fgen.print_settings()
+```
 
 
 ### Syncronisation and frequency lock
 
-The phase of the two channels can be syncronised with `syncronise_waveforms()`. Frequency lock can also be enabled/disabled with `enable_frequency_lock()`/`disable_frequency_lock()`.
+The phase of the two channels can be syncronised with `syncronise_waveforms()`. Frequency lock can also be enabled/disabled with `set_frequency_lock()`:
+
+```python
+"""Example showing the frequency being set to 10Hz and then the frequency
+lock enabled, using the frequency at ch1 as the common frequency"""
+import tektronix_func_gen as tfg
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', verbose=False) as fgen:
+    fgen.ch1.set_frequency(10)
+    fgen.set_frequency_lock("ON", use_channel=1)
+```
 
 
 ### Arbitrary waveforms
@@ -61,7 +86,7 @@ The length of the waveform must be between 2 and 8192 points.
 ```python
 import numpy as np
 import tektronix_func_gen as tfg
-with tfg.func_gen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
       # create waveform
       x = np.linspace(0, 4*np.pi, 8000)
       waveform = np.sin(x)+x/5
@@ -82,7 +107,7 @@ with tfg.func_gen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
 
 ### Set voltage and frequency limits
 
-Limits for amplitude, voltage and frequency can be set by accessing the `func_gen_channel.channel_limits` dictionary or using the `set_stricter_limits()`. The dictionary has the following structure (these are the standard limits for AFG1022)
+Limits for amplitude, voltage and frequency for each channel are kept in a dictionary `FuncGenChannel.channel_limits`  (these are the standard limits for AFG1022)
 
 ```python
 channel_limits = {
@@ -92,3 +117,27 @@ channel_limits = {
   "amplitude lims": ({"50ohm": {"min": 0.001, "max": 10},
                       "highZ": {"min": 0.002, "max": 20}}, "Vpp")}
 ```
+
+They chan be changed by `FuncGenChannel.set_limit()`, or by using the `FuncGenChannel.set_stricter_limits()` for a series of prompts.
+
+```python
+import tektronix_func_gen as tfg
+"""Example showing how limits can be read and changed"""
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+    lims = fgen.ch1.get_frequency_lims()
+    print("Channel 1 frequency limits: {}".format(lims))
+    print("Change the lower limit to 2Hz..")
+    fgen.ch1.set_limit("frequency lims", "min", 2)
+    lims = fgen.ch1.get_frequency_lims()
+    print("Channel 1 frequency limits: {}".format(lims))
+    print("Try to set ch1 frequency to 1Hz..")
+    try:
+        fgen.ch1.set_frequency(1)
+    except NotSetError as err:
+        print(err)
+```
+
+
+### Impedance
+
+Unfortunately the impedance (50Ω or high Z) cannot be controlled or read remotely. Which setting is in use affects the limits of the output voltage. Use the optional impedance keyword in the initialisation of the func_gen object to make the object aware what limits applies: `FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.
