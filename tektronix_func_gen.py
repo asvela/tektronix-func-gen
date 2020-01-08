@@ -8,7 +8,14 @@ run `$ pdoc --html tektronix_func_gen`
 Andreas Svela 2019
 
 Todo:
-    * add AM/FM capabilites
+  * add AM/FM capabilites
+
+Note:
+  * The offset of the built-in DC function cannot be controlled, this is
+    an error from Tektronix. A workaround is to tranfer a flat custom waveform
+    to a memory location. (Remember not to normalise this function, but
+    transfer two or more points of half the vertical range
+    (`arbitrary_waveform_resolution`)
 """
 
 import copy
@@ -460,6 +467,12 @@ class FuncGen():
     def normalise_to_waveform(self, shape):
         """Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
+
+        .. note::
+            If you are transferring a flat/constant waveform, do not use this
+            normaisation function. Transfer a waveform like
+            `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
+            without normalising for a well behaved flat function.
 
         Parameters
         ----------
@@ -943,7 +956,10 @@ class FuncGenChannel:
             actual_amplitude = self.get_amplitude()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_amplitude = amplitude*SI_prefix_to_factor(unit) if not unit == "" else amplitude
+            if not unit == "":
+                check_amplitude = amplitude*self.SI_prefix_to_factor(unit)
+            else:
+                 check_amplitude = amplitude
             if not actual_amplitude == check_amplitude:
                 msg = ("Amplitude {}{} was not set on channel {}, it is "
                        "{}Vpp. Check that the number is within the possible "
@@ -989,7 +1005,7 @@ class FuncGenChannel:
         if self.fgen.verify_param_set:
             actual_offset = self.get_offset()
             # Multiply with the appropriate factor according to SI prefix
-            check_offset = offset*SI_prefix_to_factor(unit)
+            check_offset = offset*self.SI_prefix_to_factor(unit)
             if not actual_offset == check_offset:
                 msg = ("Offset {}{} was not set on channel {}, it is {}V. "
                        "Check that the number is within the possible range and "
@@ -1036,7 +1052,10 @@ class FuncGenChannel:
             actual_freq = self.get_frequency()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_freq = freq*SI_prefix_to_factor(unit) if not unit == "" else freq
+            if not unit == "":
+                check_freq = freq*self.SI_prefix_to_factor(unit)
+            else:
+                check_freq =  freq
             if not actual_freq == check_freq:
                 msg = ("Frequency {}{} was not set on channel {}, it is {}Hz. "
                 "Check that the number is within the possible range and in "
@@ -1046,7 +1065,36 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
 
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ AUXILIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+    ## ~~~~~~~~~~~~~~~~~~~~~~~ AUXILLIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+    @staticmethod
+    def SI_prefix_to_factor(unit):
+        """Convert an SI prefix to a numerical factor
+
+        Parameters
+        ----------
+        unit : str
+            The unit whose first character is checked against the list of
+            prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}
+
+        Returns
+        -------
+        factor : float or `None`
+            The appropriate factor or 1 if not found in the list, or `None`
+            if the unit string is empty
+        """
+        # SI prefix to numerical value
+        SI_conversion = {"M":1e6, "k":1e3, "m":1e-3}
+        try:  # using the unit's first character as key in the dictionary
+            factor = SI_conversion[unit[0]]
+        except KeyError:  # if the entry does not exist
+            factor = 1
+        except IndexError:  # if the unit string is empty
+            factor = None
+        return factor
+
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 class NotSetError(Exception):
     """Error for when a value cannot be written to the instrument"""
@@ -1054,32 +1102,6 @@ class NotSetError(Exception):
 
 class NotCompatibleError(Exception):
     """Error for when the instrument is not compatible with this module"""
-
-
-def SI_prefix_to_factor(unit):
-    """Convert an SI prefix to a numerical factor
-
-    Parameters
-    ----------
-    unit : str
-        The unit whose first character is checked against the list of
-        prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}
-
-    Returns
-    -------
-    factor : float or `None`
-        The appropriate factor or 1 if not found in the list, or `None`
-        if the unit string is empty
-    """
-    # SI prefix to numerical value
-    SI_conversion = {"M":1e6, "k":1e3, "m":1e-3}
-    try:  # using the unit's first character as key in the dictionary
-        factor = SI_conversion[unit[0]]
-    except KeyError:  # if the entry does not exist
-        factor = 1
-    except IndexError:  # if the unit string is empty
-        factor = None
-    return factor
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ EXAMPLES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##

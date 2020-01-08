@@ -28,6 +28,14 @@ run <code>$ pdoc --html tektronix_func_gen</code></p>
 <ul>
 <li>add AM/FM capabilites</li>
 </ul>
+<h2 id="note">Note</h2>
+<ul>
+<li>The offset of the built-in DC function cannot be controlled, this is
+an error from Tektronix. A workaround is to tranfer a flat custom waveform
+to a memory location. (Remember not to normalise this function, but
+transfer two or more points of half the vertical range
+(<code>arbitrary_waveform_resolution</code>)</li>
+</ul>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -42,7 +50,14 @@ run `$ pdoc --html tektronix_func_gen`
 Andreas Svela 2019
 
 Todo:
-    * add AM/FM capabilites
+  * add AM/FM capabilites
+
+Note:
+  * The offset of the built-in DC function cannot be controlled, this is
+    an error from Tektronix. A workaround is to tranfer a flat custom waveform
+    to a memory location. (Remember not to normalise this function, but
+    transfer two or more points of half the vertical range
+    (`arbitrary_waveform_resolution`)
 &#34;&#34;&#34;
 
 import copy
@@ -494,6 +509,12 @@ class FuncGen():
     def normalise_to_waveform(self, shape):
         &#34;&#34;&#34;Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
+
+        .. note::
+            If you are transferring a constant waveform, do not use this
+            normaisation function. Transfer a waveform like
+            `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
+            without normalising for a well behaved flat function.
 
         Parameters
         ----------
@@ -977,7 +998,10 @@ class FuncGenChannel:
             actual_amplitude = self.get_amplitude()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_amplitude = amplitude*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else amplitude
+            if not unit == &#34;&#34;:
+                check_amplitude = amplitude*self.SI_prefix_to_factor(unit)
+            else:
+                 check_amplitude = amplitude
             if not actual_amplitude == check_amplitude:
                 msg = (&#34;Amplitude {}{} was not set on channel {}, it is &#34;
                        &#34;{}Vpp. Check that the number is within the possible &#34;
@@ -1023,7 +1047,7 @@ class FuncGenChannel:
         if self.fgen.verify_param_set:
             actual_offset = self.get_offset()
             # Multiply with the appropriate factor according to SI prefix
-            check_offset = offset*SI_prefix_to_factor(unit)
+            check_offset = offset*self.SI_prefix_to_factor(unit)
             if not actual_offset == check_offset:
                 msg = (&#34;Offset {}{} was not set on channel {}, it is {}V. &#34;
                        &#34;Check that the number is within the possible range and &#34;
@@ -1070,7 +1094,10 @@ class FuncGenChannel:
             actual_freq = self.get_frequency()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_freq = freq*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else freq
+            if not unit == &#34;&#34;:
+                check_freq = freq*self.SI_prefix_to_factor(unit)
+            else:
+                check_freq =  freq
             if not actual_freq == check_freq:
                 msg = (&#34;Frequency {}{} was not set on channel {}, it is {}Hz. &#34;
                 &#34;Check that the number is within the possible range and in &#34;
@@ -1080,7 +1107,36 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
 
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ AUXILIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+    ## ~~~~~~~~~~~~~~~~~~~~~~~ AUXILLIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+    @staticmethod
+    def SI_prefix_to_factor(unit):
+        &#34;&#34;&#34;Convert an SI prefix to a numerical factor
+
+        Parameters
+        ----------
+        unit : str
+            The unit whose first character is checked against the list of
+            prefactors {&#34;M&#34;: 1e6, &#34;k&#34;: 1e3, &#34;m&#34;: 1e-3}
+
+        Returns
+        -------
+        factor : float or `None`
+            The appropriate factor or 1 if not found in the list, or `None`
+            if the unit string is empty
+        &#34;&#34;&#34;
+        # SI prefix to numerical value
+        SI_conversion = {&#34;M&#34;:1e6, &#34;k&#34;:1e3, &#34;m&#34;:1e-3}
+        try:  # using the unit&#39;s first character as key in the dictionary
+            factor = SI_conversion[unit[0]]
+        except KeyError:  # if the entry does not exist
+            factor = 1
+        except IndexError:  # if the unit string is empty
+            factor = None
+        return factor
+
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 class NotSetError(Exception):
     &#34;&#34;&#34;Error for when a value cannot be written to the instrument&#34;&#34;&#34;
@@ -1088,32 +1144,6 @@ class NotSetError(Exception):
 
 class NotCompatibleError(Exception):
     &#34;&#34;&#34;Error for when the instrument is not compatible with this module&#34;&#34;&#34;
-
-
-def SI_prefix_to_factor(unit):
-    &#34;&#34;&#34;Convert an SI prefix to a numerical factor
-
-    Parameters
-    ----------
-    unit : str
-        The unit whose first character is checked against the list of
-        prefactors {&#34;M&#34;: 1e6, &#34;k&#34;: 1e3, &#34;m&#34;: 1e-3}
-
-    Returns
-    -------
-    factor : float or `None`
-        The appropriate factor or 1 if not found in the list, or `None`
-        if the unit string is empty
-    &#34;&#34;&#34;
-    # SI prefix to numerical value
-    SI_conversion = {&#34;M&#34;:1e6, &#34;k&#34;:1e3, &#34;m&#34;:1e-3}
-    try:  # using the unit&#39;s first character as key in the dictionary
-        factor = SI_conversion[unit[0]]
-    except KeyError:  # if the entry does not exist
-        factor = 1
-    except IndexError:  # if the unit string is empty
-        factor = None
-    return factor
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ EXAMPLES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -1229,53 +1259,6 @@ if __name__ == &#39;__main__&#39;:
 <section>
 <h2 class="section-title" id="header-functions">Functions</h2>
 <dl>
-<dt id="tektronix_func_gen.SI_prefix_to_factor"><code class="name flex">
-<span>def <span class="ident">SI_prefix_to_factor</span></span>(<span>unit)</span>
-</code></dt>
-<dd>
-<section class="desc"><p>Convert an SI prefix to a numerical factor</p>
-<h2 id="parameters">Parameters</h2>
-<dl>
-<dt><strong><code>unit</code></strong> :&ensp;<code>str</code></dt>
-<dd>The unit whose first character is checked against the list of
-prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}</dd>
-</dl>
-<h2 id="returns">Returns</h2>
-<dl>
-<dt><strong><code>factor</code></strong> :&ensp;<code>float</code> or <code>None</code></dt>
-<dd>The appropriate factor or 1 if not found in the list, or <code>None</code>
-if the unit string is empty</dd>
-</dl></section>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def SI_prefix_to_factor(unit):
-    &#34;&#34;&#34;Convert an SI prefix to a numerical factor
-
-    Parameters
-    ----------
-    unit : str
-        The unit whose first character is checked against the list of
-        prefactors {&#34;M&#34;: 1e6, &#34;k&#34;: 1e3, &#34;m&#34;: 1e-3}
-
-    Returns
-    -------
-    factor : float or `None`
-        The appropriate factor or 1 if not found in the list, or `None`
-        if the unit string is empty
-    &#34;&#34;&#34;
-    # SI prefix to numerical value
-    SI_conversion = {&#34;M&#34;:1e6, &#34;k&#34;:1e3, &#34;m&#34;:1e-3}
-    try:  # using the unit&#39;s first character as key in the dictionary
-        factor = SI_conversion[unit[0]]
-    except KeyError:  # if the entry does not exist
-        factor = 1
-    except IndexError:  # if the unit string is empty
-        factor = None
-    return factor</code></pre>
-</details>
-</dd>
 <dt id="tektronix_func_gen.example_basic_control"><code class="name flex">
 <span>def <span class="ident">example_basic_control</span></span>(<span>address)</span>
 </code></dt>
@@ -1940,6 +1923,12 @@ use AFG1022 limits)</dd>
         &#34;&#34;&#34;Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
 
+        .. note::
+            If you are transferring a constant waveform, do not use this
+            normaisation function. Transfer a waveform like
+            `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
+            without normalising for a well behaved flat function.
+
         Parameters
         ----------
         shape : array_like
@@ -2371,6 +2360,13 @@ package, slimits are not known.</dd>
 <dd>
 <section class="desc"><p>Normalise a shape of any discretisation and range to a waveform that
 can be transmitted to the function generator</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If you are transferring a constant waveform, do not use this
+normaisation function. Transfer a waveform like
+<code>int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)</code>
+without normalising for a well behaved flat function.</p>
+</div>
 <h2 id="parameters">Parameters</h2>
 <dl>
 <dt><strong><code>shape</code></strong> :&ensp;<code>array_like</code></dt>
@@ -2389,6 +2385,12 @@ any normalisation or discretisation</dd>
 <pre><code class="python">def normalise_to_waveform(self, shape):
     &#34;&#34;&#34;Normalise a shape of any discretisation and range to a waveform that
     can be transmitted to the function generator
+
+    .. note::
+        If you are transferring a constant waveform, do not use this
+        normaisation function. Transfer a waveform like
+        `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
+        without normalising for a well behaved flat function.
 
     Parameters
     ----------
@@ -3280,7 +3282,10 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
             actual_amplitude = self.get_amplitude()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_amplitude = amplitude*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else amplitude
+            if not unit == &#34;&#34;:
+                check_amplitude = amplitude*self.SI_prefix_to_factor(unit)
+            else:
+                 check_amplitude = amplitude
             if not actual_amplitude == check_amplitude:
                 msg = (&#34;Amplitude {}{} was not set on channel {}, it is &#34;
                        &#34;{}Vpp. Check that the number is within the possible &#34;
@@ -3326,7 +3331,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
         if self.fgen.verify_param_set:
             actual_offset = self.get_offset()
             # Multiply with the appropriate factor according to SI prefix
-            check_offset = offset*SI_prefix_to_factor(unit)
+            check_offset = offset*self.SI_prefix_to_factor(unit)
             if not actual_offset == check_offset:
                 msg = (&#34;Offset {}{} was not set on channel {}, it is {}V. &#34;
                        &#34;Check that the number is within the possible range and &#34;
@@ -3373,20 +3378,103 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
             actual_freq = self.get_frequency()
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
-            check_freq = freq*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else freq
+            if not unit == &#34;&#34;:
+                check_freq = freq*self.SI_prefix_to_factor(unit)
+            else:
+                check_freq =  freq
             if not actual_freq == check_freq:
                 msg = (&#34;Frequency {}{} was not set on channel {}, it is {}Hz. &#34;
                 &#34;Check that the number is within the possible range and in &#34;
                 &#34;the correct format.\nError from the instrument: {}&#34;
                 &#34;&#34;.format(freq, unit, self.channel, actual_freq,
                             self.fgen.get_error()))
-                raise NotSetError(msg)</code></pre>
+                raise NotSetError(msg)
+
+
+    ## ~~~~~~~~~~~~~~~~~~~~~~~ AUXILLIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+    @staticmethod
+    def SI_prefix_to_factor(unit):
+        &#34;&#34;&#34;Convert an SI prefix to a numerical factor
+
+        Parameters
+        ----------
+        unit : str
+            The unit whose first character is checked against the list of
+            prefactors {&#34;M&#34;: 1e6, &#34;k&#34;: 1e3, &#34;m&#34;: 1e-3}
+
+        Returns
+        -------
+        factor : float or `None`
+            The appropriate factor or 1 if not found in the list, or `None`
+            if the unit string is empty
+        &#34;&#34;&#34;
+        # SI prefix to numerical value
+        SI_conversion = {&#34;M&#34;:1e6, &#34;k&#34;:1e3, &#34;m&#34;:1e-3}
+        try:  # using the unit&#39;s first character as key in the dictionary
+            factor = SI_conversion[unit[0]]
+        except KeyError:  # if the entry does not exist
+            factor = 1
+        except IndexError:  # if the unit string is empty
+            factor = None
+        return factor</code></pre>
 </details>
 <h3>Class variables</h3>
 <dl>
 <dt id="tektronix_func_gen.FuncGenChannel.state_str"><code class="name">var <span class="ident">state_str</span></code></dt>
 <dd>
 <section class="desc"><p>Dictionary for converting output states to "ON" and "OFF"</p></section>
+</dd>
+</dl>
+<h3>Static methods</h3>
+<dl>
+<dt id="tektronix_func_gen.FuncGenChannel.SI_prefix_to_factor"><code class="name flex">
+<span>def <span class="ident">SI_prefix_to_factor</span></span>(<span>unit)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Convert an SI prefix to a numerical factor</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>unit</code></strong> :&ensp;<code>str</code></dt>
+<dd>The unit whose first character is checked against the list of
+prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>factor</code></strong> :&ensp;<code>float</code> or <code>None</code></dt>
+<dd>The appropriate factor or 1 if not found in the list, or <code>None</code>
+if the unit string is empty</dd>
+</dl></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def SI_prefix_to_factor(unit):
+    &#34;&#34;&#34;Convert an SI prefix to a numerical factor
+
+    Parameters
+    ----------
+    unit : str
+        The unit whose first character is checked against the list of
+        prefactors {&#34;M&#34;: 1e6, &#34;k&#34;: 1e3, &#34;m&#34;: 1e-3}
+
+    Returns
+    -------
+    factor : float or `None`
+        The appropriate factor or 1 if not found in the list, or `None`
+        if the unit string is empty
+    &#34;&#34;&#34;
+    # SI prefix to numerical value
+    SI_conversion = {&#34;M&#34;:1e6, &#34;k&#34;:1e3, &#34;m&#34;:1e-3}
+    try:  # using the unit&#39;s first character as key in the dictionary
+        factor = SI_conversion[unit[0]]
+    except KeyError:  # if the entry does not exist
+        factor = 1
+    except IndexError:  # if the unit string is empty
+        factor = None
+    return factor</code></pre>
+</details>
 </dd>
 </dl>
 <h3>Methods</h3>
@@ -3681,7 +3769,10 @@ get function</dd>
         actual_amplitude = self.get_amplitude()
         # Multiply with the appropriate factor according to SI prefix, or
         # if string is empty, use the value looked up from channel_limits earlier
-        check_amplitude = amplitude*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else amplitude
+        if not unit == &#34;&#34;:
+            check_amplitude = amplitude*self.SI_prefix_to_factor(unit)
+        else:
+             check_amplitude = amplitude
         if not actual_amplitude == check_amplitude:
             msg = (&#34;Amplitude {}{} was not set on channel {}, it is &#34;
                    &#34;{}Vpp. Check that the number is within the possible &#34;
@@ -3753,7 +3844,10 @@ get function</dd>
         actual_freq = self.get_frequency()
         # Multiply with the appropriate factor according to SI prefix, or
         # if string is empty, use the value looked up from channel_limits earlier
-        check_freq = freq*SI_prefix_to_factor(unit) if not unit == &#34;&#34; else freq
+        if not unit == &#34;&#34;:
+            check_freq = freq*self.SI_prefix_to_factor(unit)
+        else:
+            check_freq =  freq
         if not actual_freq == check_freq:
             msg = (&#34;Frequency {}{} was not set on channel {}, it is {}Hz. &#34;
             &#34;Check that the number is within the possible range and in &#34;
@@ -3977,7 +4071,7 @@ get function</dd>
     if self.fgen.verify_param_set:
         actual_offset = self.get_offset()
         # Multiply with the appropriate factor according to SI prefix
-        check_offset = offset*SI_prefix_to_factor(unit)
+        check_offset = offset*self.SI_prefix_to_factor(unit)
         if not actual_offset == check_offset:
             msg = (&#34;Offset {}{} was not set on channel {}, it is {}V. &#34;
                    &#34;Check that the number is within the possible range and &#34;
@@ -4187,7 +4281,6 @@ through a series of prompts</p></section>
 <ul id="index">
 <li><h3><a href="#header-functions">Functions</a></h3>
 <ul class="">
-<li><code><a title="tektronix_func_gen.SI_prefix_to_factor" href="#tektronix_func_gen.SI_prefix_to_factor">SI_prefix_to_factor</a></code></li>
 <li><code><a title="tektronix_func_gen.example_basic_control" href="#tektronix_func_gen.example_basic_control">example_basic_control</a></code></li>
 <li><code><a title="tektronix_func_gen.example_change_settings" href="#tektronix_func_gen.example_change_settings">example_change_settings</a></code></li>
 <li><code><a title="tektronix_func_gen.example_changing_limits" href="#tektronix_func_gen.example_changing_limits">example_changing_limits</a></code></li>
@@ -4225,6 +4318,7 @@ through a series of prompts</p></section>
 <li>
 <h4><code><a title="tektronix_func_gen.FuncGenChannel" href="#tektronix_func_gen.FuncGenChannel">FuncGenChannel</a></code></h4>
 <ul class="">
+<li><code><a title="tektronix_func_gen.FuncGenChannel.SI_prefix_to_factor" href="#tektronix_func_gen.FuncGenChannel.SI_prefix_to_factor">SI_prefix_to_factor</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGenChannel.get_amplitude" href="#tektronix_func_gen.FuncGenChannel.get_amplitude">get_amplitude</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGenChannel.get_amplitude_lims" href="#tektronix_func_gen.FuncGenChannel.get_amplitude_lims">get_amplitude_lims</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGenChannel.get_frequency" href="#tektronix_func_gen.FuncGenChannel.get_frequency">get_frequency</a></code></li>

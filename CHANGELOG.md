@@ -1,3 +1,7 @@
+v0.3
+- Made SI_prefix_to_factor a staticmethod in FuncGen rather than module-level function
+- Added note about constant/flat function
+
 v0.2
 - More PEP8 compliant:
   - `func_gen()` -> `FuncGen()`
