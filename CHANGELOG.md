@@ -1,4 +1,8 @@
-v0.3
+v0.3.1
+- Added note about known issue with TekVISA
+- Added more details about flat waveform offset through custom waveform workaround
+
+v0.3.0
 - Made SI_prefix_to_factor a staticmethod in FuncGen rather than module-level function
 - Added note about constant/flat function
 

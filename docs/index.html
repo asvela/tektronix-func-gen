@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
-<meta name="generator" content="pdoc 0.7.2" />
+<meta name="generator" content="pdoc 0.7.5" />
 <title>tektronix_func_gen API documentation</title>
-<meta name="description" content="Control of Tektronix AFG1022 function generator through PyVISA …" />
+<meta name="description" content="Tektronix arbitrary function generator control through PyVISA …" />
 <link href='https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.0/normalize.min.css' rel='stylesheet'>
 <link href='https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/8.0.0/sanitize.min.css' rel='stylesheet'>
 <link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/github.min.css" rel="stylesheet">
@@ -20,21 +20,23 @@
 <h1 class="title">Module <code>tektronix_func_gen</code></h1>
 </header>
 <section id="section-intro">
-<p>Control of Tektronix AFG1022 function generator through PyVISA</p>
+<h2 id="tektronix-arbitrary-function-generator-control-through-pyvisa">Tektronix arbitrary function generator control through PyVISA</h2>
+<p>Andreas Svela 2020</p>
 <p>To build the documentation use <a href="https://pdoc3.github.io/pdoc/">pdoc3</a> and
 run <code>$ pdoc --html tektronix_func_gen</code></p>
-<p>Andreas Svela 2019</p>
+<p>Tested on Win10 with NI-VISA.</p>
 <h2 id="todo">Todo</h2>
 <ul>
 <li>add AM/FM capabilites</li>
 </ul>
-<h2 id="note">Note</h2>
+<h2 id="notes">Notes</h2>
 <ul>
-<li>The offset of the built-in DC function cannot be controlled, this is
-an error from Tektronix. A workaround is to tranfer a flat custom waveform
-to a memory location. (Remember not to normalise this function, but
-transfer two or more points of half the vertical range
-(<code>arbitrary_waveform_resolution</code>)</li>
+<li><strong>For TekVISA users:</strong> a <code>pyvisa.errors.VI_ERROR_IO</code> is raised unless
+the Call Monitor application that comes with TekVISA is open and capturing
+(see issue <a href="https://github.com/asvela/tektronix-func-gen/issues/1">#1</a>)</li>
+<li>The offset of the built-in DC function cannot be controlled. A workaround
+is to transfer a flat custom waveform to a memory location, see README.md
+-&gt; Arbitrary waveforms -&gt; Flat function offset control</li>
 </ul>
 <details class="source">
 <summary>
@@ -42,22 +44,25 @@ transfer two or more points of half the vertical range
 </summary>
 <pre><code class="python"># -*- coding: utf-8 -*-
 &#34;&#34;&#34;
-Control of Tektronix AFG1022 function generator through PyVISA
+## Tektronix arbitrary function generator control through PyVISA
+
+Andreas Svela 2020
 
 To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and
 run `$ pdoc --html tektronix_func_gen`
 
-Andreas Svela 2019
+Tested on Win10 with NI-VISA.
 
 Todo:
   * add AM/FM capabilites
 
-Note:
-  * The offset of the built-in DC function cannot be controlled, this is
-    an error from Tektronix. A workaround is to tranfer a flat custom waveform
-    to a memory location. (Remember not to normalise this function, but
-    transfer two or more points of half the vertical range
-    (`arbitrary_waveform_resolution`)
+Notes:
+  * **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless
+    the Call Monitor application that comes with TekVISA is open and capturing
+    (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1))
+  * The offset of the built-in DC function cannot be controlled. A workaround
+    is to transfer a flat custom waveform to a memory location, see README.md
+    -&gt; Arbitrary waveforms -&gt; Flat function offset control
 &#34;&#34;&#34;
 
 import copy
@@ -511,7 +516,7 @@ class FuncGen():
         can be transmitted to the function generator
 
         .. note::
-            If you are transferring a constant waveform, do not use this
+            If you are transferring a flat/constant waveform, do not use this
             normaisation function. Transfer a waveform like
             `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
             without normalising for a well behaved flat function.
@@ -1428,7 +1433,7 @@ For example <code>("highZ", "50ohm")</code> for to use high Z for ch1 and
 <dd>Choose whether to print information such as model upon connecting etc</dd>
 <dt><strong><code>override_compatibility</code></strong> :&ensp;<code>bool</code>, default <code>False</code></dt>
 <dd>If the instrument limits for the model connected to are not known
-<code>NotCompatibleError</code> will be raised. To override and use AFG1022 limits,
+<a title="tektronix_func_gen.NotCompatibleError" href="#tektronix_func_gen.NotCompatibleError"><code>NotCompatibleError</code></a> will be raised. To override and use AFG1022 limits,
 set to <code>True</code>. Note that this might lead to unexpected behaviour for
 custom waveforms and 'MIN'/'MAX' keywords.</dd>
 </dl>
@@ -1441,11 +1446,11 @@ custom waveforms and 'MIN'/'MAX' keywords.</dd>
 the instrument</dd>
 <dt><strong><code>inst</code></strong> :&ensp;<code>pyvisa.resources.Resource</code></dt>
 <dd>The PyVISA resource</dd>
-<dt><strong><code>channels</code></strong> :&ensp;<code>tuple</code> of <code>FuncGenChannel</code></dt>
+<dt><strong><code>channels</code></strong> :&ensp;<code>tuple</code> of <a title="tektronix_func_gen.FuncGenChannel" href="#tektronix_func_gen.FuncGenChannel"><code>FuncGenChannel</code></a></dt>
 <dd>Objects to control the channels</dd>
-<dt><strong><code>ch1</code></strong> :&ensp;<code>FuncGenChannel</code></dt>
+<dt><strong><code>ch1</code></strong> :&ensp;<a title="tektronix_func_gen.FuncGenChannel" href="#tektronix_func_gen.FuncGenChannel"><code>FuncGenChannel</code></a></dt>
 <dd>Short hand for <code>channels[0]</code> Object to control channel 1</dd>
-<dt><strong><code>ch2</code></strong> :&ensp;<code>FuncGenChannel</code></dt>
+<dt><strong><code>ch2</code></strong> :&ensp;<a title="tektronix_func_gen.FuncGenChannel" href="#tektronix_func_gen.FuncGenChannel"><code>FuncGenChannel</code></a></dt>
 <dd>Short hand for <code>channels[1]</code> Object to control channel 2</dd>
 <dt><strong><code>instrument_limits</code></strong> :&ensp;<code>dict</code></dt>
 <dd>Contains the following keys with subdictionaries
@@ -1471,7 +1476,7 @@ e.g. [2, 8192]</dd>
 <dl>
 <dt><code>pyvisa.Error</code></dt>
 <dd>If the supplied VISA address cannot be connected to</dd>
-<dt><code>NotCompatibleError</code></dt>
+<dt><a title="tektronix_func_gen.NotCompatibleError" href="#tektronix_func_gen.NotCompatibleError"><code>NotCompatibleError</code></a></dt>
 <dd>If the instrument limits for the model connected to are not known
 (Call the class with <code>override_compatibility=True</code> to override and
 use AFG1022 limits)</dd>
@@ -1924,7 +1929,7 @@ use AFG1022 limits)</dd>
         can be transmitted to the function generator
 
         .. note::
-            If you are transferring a constant waveform, do not use this
+            If you are transferring a flat/constant waveform, do not use this
             normaisation function. Transfer a waveform like
             `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
             without normalising for a well behaved flat function.
@@ -2362,7 +2367,7 @@ package, slimits are not known.</dd>
 can be transmitted to the function generator</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>If you are transferring a constant waveform, do not use this
+<p>If you are transferring a flat/constant waveform, do not use this
 normaisation function. Transfer a waveform like
 <code>int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)</code>
 without normalising for a well behaved flat function.</p>
@@ -2387,7 +2392,7 @@ any normalisation or discretisation</dd>
     can be transmitted to the function generator
 
     .. note::
-        If you are transferring a constant waveform, do not use this
+        If you are transferring a flat/constant waveform, do not use this
         normaisation function. Transfer a waveform like
         `int(self.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)`
         without normalising for a well behaved flat function.
@@ -2890,7 +2895,7 @@ pyvisa returned StatusCode .."</dd>
 <section class="desc"><p>Class for controlling a channel on a function generator object</p>
 <h2 id="parameters">Parameters</h2>
 <dl>
-<dt><strong><code>fgen</code></strong> :&ensp;<code>&lt;a title="tektronix_func_gen.FuncGen" href="#tektronix_func_gen.FuncGen"&gt;</code>FuncGen<code>&lt;/a&gt;</code></dt>
+<dt><strong><code>fgen</code></strong> :&ensp;<code>FuncGen</code></dt>
 <dd>The function generator object</dd>
 <dt><strong><code>channel</code></strong> :&ensp;{<code>1</code>, <code>2</code>}</dt>
 <dd>The channel to be controlled</dd>
@@ -2900,7 +2905,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
 </dl>
 <h2 id="attributes">Attributes</h2>
 <dl>
-<dt><strong><code>fgen</code></strong> :&ensp;<code>&lt;a title="tektronix_func_gen.FuncGen" href="#tektronix_func_gen.FuncGen"&gt;</code>FuncGen<code>&lt;/a&gt;</code></dt>
+<dt><strong><code>fgen</code></strong> :&ensp;<code>FuncGen</code></dt>
 <dd>The function generator object for which the channel exists</dd>
 <dt><strong><code>channel</code></strong> :&ensp;{<code>1</code>, <code>2</code>}</dt>
 <dd>The channel number</dd>
@@ -2910,7 +2915,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
 <dt><strong><code>source</code></strong> :&ensp;<code>str</code></dt>
 <dd>"SOURce{}:" where {} is the channel number</dd>
 <dt><strong><code>settings_units</code></strong> :&ensp;<code>list</code></dt>
-<dd>The units for the settings produced by <code>FuncGenChannel.get_settings</code></dd>
+<dd>The units for the settings produced by <a title="tektronix_func_gen.FuncGenChannel.get_settings" href="#tektronix_func_gen.FuncGenChannel.get_settings"><code>FuncGenChannel.get_settings()</code></a></dd>
 <dt><strong><code>state_str</code></strong> :&ensp;<code>dict</code></dt>
 <dd>For conversion from states 1 and 2 to "ON" and "OFF"</dd>
 </dl></section>
@@ -4234,7 +4239,7 @@ through a series of prompts</p></section>
 </dd>
 <dt id="tektronix_func_gen.NotCompatibleError"><code class="flex name class">
 <span>class <span class="ident">NotCompatibleError</span></span>
-<span>(</span><span>*args, **kwargs)</span>
+<span>(</span><span>...)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Error for when the instrument is not compatible with this module</p></section>
@@ -4253,7 +4258,7 @@ through a series of prompts</p></section>
 </dd>
 <dt id="tektronix_func_gen.NotSetError"><code class="flex name class">
 <span>class <span class="ident">NotSetError</span></span>
-<span>(</span><span>*args, **kwargs)</span>
+<span>(</span><span>...)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Error for when a value cannot be written to the instrument</p></section>
@@ -4276,7 +4281,9 @@ through a series of prompts</p></section>
 <nav id="sidebar">
 <h1>Index</h1>
 <div class="toc">
-<ul></ul>
+<ul>
+<li><a href="#tektronix-arbitrary-function-generator-control-through-pyvisa">Tektronix arbitrary function generator control through PyVISA</a></li>
+</ul>
 </div>
 <ul id="index">
 <li><h3><a href="#header-functions">Functions</a></h3>
@@ -4355,7 +4362,7 @@ through a series of prompts</p></section>
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc"><cite>pdoc</cite> 0.7.2</a>.</p>
+<p>Generated by <a href="https://pdoc3.github.io/pdoc"><cite>pdoc</cite> 0.7.5</a>.</p>
 </footer>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
 <script>hljs.initHighlightingOnLoad()</script>

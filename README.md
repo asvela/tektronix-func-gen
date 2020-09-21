@@ -1,13 +1,24 @@
 # Tektronix arbitrary function generator control through PyVISA
 
-v0.3.0 // Jan 2020
+v0.3.1 // Sep 2020
 
 API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
+Tested on Win10 with NI-VISA.
+
+
+## Known issues
+
+- **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless the Call Monitor application that comes with TekVISA is open and capturing (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)). NI-VISA does not have this issue.
+- The offset of the built-in DC (flat) function cannot be controlled. A workaround is to transfer a flat custom waveform to a memory location, see [Flat function offset control](#flat-function-offset-control) in this readme.
 
 ## Installation
 
-Put the module file in the folder wherein the file you will import it from resides.
+Put the module file in the folder wherein the python file you will import it from resides.
+
+**Dependencies:**
+- The package needs VISA to be installed. It is tested with NI-VISA, *TekVISA might not work*, see known issues
+- The Python packages `numpy` and `pyvisa` are required
 
 
 ## Usage (through examples)
@@ -103,6 +114,20 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
       # print current settings
       fgen.print_settings()
 ```
+
+#### Flat function offset control
+
+The offset of the built-in DC function cannot be controlled (the offset command simply does not work, an issue from Tektronix). A workaround is to transfer a flat custom waveform (two or more points of half the vertical range (`arbitrary_waveform_resolution`)) to a memory location:
+
+```python
+with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
+    flat_wfm = int(fgen.arbitrary_waveform_resolution/2)*np.ones(2).astype(np.int32)
+    fgen.set_custom_waveform(flat_wfm, memory_num=255, normalise=False)
+    fgen.ch1.set_function("USER255")
+    fgen.ch1.set_offset(2)
+```
+
+Note the `normalise=False` argument.
 
 
 ### Set voltage and frequency limits

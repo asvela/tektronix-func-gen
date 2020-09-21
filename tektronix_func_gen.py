@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Control of Tektronix AFG1022 function generator through PyVISA
+## Tektronix arbitrary function generator control through PyVISA
+
+Andreas Svela 2020
 
 To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and
 run `$ pdoc --html tektronix_func_gen`
 
-Andreas Svela 2019
+Tested on Win10 with NI-VISA.
 
 Todo:
   * add AM/FM capabilites
 
-Note:
-  * The offset of the built-in DC function cannot be controlled, this is
-    an error from Tektronix. A workaround is to tranfer a flat custom waveform
-    to a memory location. (Remember not to normalise this function, but
-    transfer two or more points of half the vertical range
-    (`arbitrary_waveform_resolution`)
+Notes:
+  * **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless
+    the Call Monitor application that comes with TekVISA is open and capturing
+    (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1))
+  * The offset of the built-in DC function cannot be controlled. A workaround
+    is to transfer a flat custom waveform to a memory location, see README.md
+    -> Arbitrary waveforms -> Flat function offset control
 """
 
 import copy
