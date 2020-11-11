@@ -223,8 +223,8 @@ class FuncGen():
         command : str
             The VISA command to be written to the instrument
         custom_err_message : str, default `None`
-            When `None`, the RuntimeError message is &#34;Writing command {command}
-            failed: pyvisa returned StatusCode ..&#34;.
+            When `None`, the RuntimeError message is &#34;Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..&#34;.
             Otherwise, if a message is supplied &#34;Could not {message}:
             pyvisa returned StatusCode ..&#34;
 
@@ -232,6 +232,55 @@ class FuncGen():
         -------
         bytes : int
             Number of bytes tranferred
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        &#34;&#34;&#34;
+        num_bytes = self.inst.write(command)
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return num_bytes
+
+    def query(self, command, custom_err_message=None):
+        &#34;&#34;&#34;Query the instrument
+
+        Parameters
+        ----------
+        command : str
+            The VISA query command
+        custom_err_message : str, default `None`
+            When `None`, the RuntimeError message is &#34;Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..&#34;.
+            Otherwise, if a message is supplied &#34;Could not {message}:
+            pyvisa returned StatusCode ..&#34;
+
+        Returns
+        -------
+        str
+            The instrument&#39;s response
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        &#34;&#34;&#34;
+        response = self.inst.query(command).strip()
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return response
+
+    def check_pyvisa_status(self, command, custom_err_message=None):
+        &#34;&#34;&#34;Check the last status code of PyVISA
+
+        Parameters
+        ----------
+        command : str
+            The VISA write/query command
+
+        Returns
+        -------
         status : pyvisa.constants.StatusCode
             Return value of the library call
 
@@ -241,32 +290,17 @@ class FuncGen():
             If status returned by PyVISA write command is not
             `pyvisa.constants.StatusCode.success`
         &#34;&#34;&#34;
-        num_bytes, status = self.inst.write(command)
+        status = self.inst.last_status
         if not status == pyvisa.constants.StatusCode.success:
             if custom_err_message is not None:
                 msg = (&#34;Could not {}: pyvisa returned StatusCode {} &#34;
                        &#34;({})&#34;.format(custom_err_message, status, str(status)))
                 raise RuntimeError(msg)
             else:
-                msg = (&#34;Writing command {} failed: pyvisa returned StatusCode&#34;
+                msg = (&#34;Writing/querying command {} failed: pyvisa returned StatusCode&#34;
                        &#34; {} ({})&#34;.format(command, status, str(status)))
                 raise RuntimeError(msg)
-        return num_bytes, status
-
-    def query(self, command):
-        &#34;&#34;&#34;Query the instrument
-
-        Parameters
-        ----------
-        command : str
-            The VISA query command
-
-        Returns
-        -------
-        str
-            The instrument&#39;s response
-        &#34;&#34;&#34;
-        return self.inst.query(command).strip()
+        return status
 
     def get_error(self):
         &#34;&#34;&#34;Get the contents of the Error/Event queue on the device
@@ -1636,8 +1670,8 @@ use AFG1022 limits)</dd>
         command : str
             The VISA command to be written to the instrument
         custom_err_message : str, default `None`
-            When `None`, the RuntimeError message is &#34;Writing command {command}
-            failed: pyvisa returned StatusCode ..&#34;.
+            When `None`, the RuntimeError message is &#34;Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..&#34;.
             Otherwise, if a message is supplied &#34;Could not {message}:
             pyvisa returned StatusCode ..&#34;
 
@@ -1645,6 +1679,55 @@ use AFG1022 limits)</dd>
         -------
         bytes : int
             Number of bytes tranferred
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        &#34;&#34;&#34;
+        num_bytes = self.inst.write(command)
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return num_bytes
+
+    def query(self, command, custom_err_message=None):
+        &#34;&#34;&#34;Query the instrument
+
+        Parameters
+        ----------
+        command : str
+            The VISA query command
+        custom_err_message : str, default `None`
+            When `None`, the RuntimeError message is &#34;Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..&#34;.
+            Otherwise, if a message is supplied &#34;Could not {message}:
+            pyvisa returned StatusCode ..&#34;
+
+        Returns
+        -------
+        str
+            The instrument&#39;s response
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        &#34;&#34;&#34;
+        response = self.inst.query(command).strip()
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return response
+
+    def check_pyvisa_status(self, command, custom_err_message=None):
+        &#34;&#34;&#34;Check the last status code of PyVISA
+
+        Parameters
+        ----------
+        command : str
+            The VISA write/query command
+
+        Returns
+        -------
         status : pyvisa.constants.StatusCode
             Return value of the library call
 
@@ -1654,32 +1737,17 @@ use AFG1022 limits)</dd>
             If status returned by PyVISA write command is not
             `pyvisa.constants.StatusCode.success`
         &#34;&#34;&#34;
-        num_bytes, status = self.inst.write(command)
+        status = self.inst.last_status
         if not status == pyvisa.constants.StatusCode.success:
             if custom_err_message is not None:
                 msg = (&#34;Could not {}: pyvisa returned StatusCode {} &#34;
                        &#34;({})&#34;.format(custom_err_message, status, str(status)))
                 raise RuntimeError(msg)
             else:
-                msg = (&#34;Writing command {} failed: pyvisa returned StatusCode&#34;
+                msg = (&#34;Writing/querying command {} failed: pyvisa returned StatusCode&#34;
                        &#34; {} ({})&#34;.format(command, status, str(status)))
                 raise RuntimeError(msg)
-        return num_bytes, status
-
-    def query(self, command):
-        &#34;&#34;&#34;Query the instrument
-
-        Parameters
-        ----------
-        command : str
-            The VISA query command
-
-        Returns
-        -------
-        str
-            The instrument&#39;s response
-        &#34;&#34;&#34;
-        return self.inst.query(command).strip()
+        return status
 
     def get_error(self):
         &#34;&#34;&#34;Get the contents of the Error/Event queue on the device
@@ -2138,6 +2206,63 @@ values are not within the permitted range</dd>
                                     self.arbitrary_waveform_resolution))</code></pre>
 </details>
 </dd>
+<dt id="tektronix_func_gen.FuncGen.check_pyvisa_status"><code class="name flex">
+<span>def <span class="ident">check_pyvisa_status</span></span>(<span>self, command, custom_err_message=None)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Check the last status code of PyVISA</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>command</code></strong> :&ensp;<code>str</code></dt>
+<dd>The VISA write/query command</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>status</code></strong> :&ensp;<code>pyvisa.constants.StatusCode</code></dt>
+<dd>Return value of the library call</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>RuntimeError</code></dt>
+<dd>If status returned by PyVISA write command is not
+<code>pyvisa.constants.StatusCode.success</code></dd>
+</dl></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def check_pyvisa_status(self, command, custom_err_message=None):
+    &#34;&#34;&#34;Check the last status code of PyVISA
+
+    Parameters
+    ----------
+    command : str
+        The VISA write/query command
+
+    Returns
+    -------
+    status : pyvisa.constants.StatusCode
+        Return value of the library call
+
+    Raises
+    ------
+    RuntimeError
+        If status returned by PyVISA write command is not
+        `pyvisa.constants.StatusCode.success`
+    &#34;&#34;&#34;
+    status = self.inst.last_status
+    if not status == pyvisa.constants.StatusCode.success:
+        if custom_err_message is not None:
+            msg = (&#34;Could not {}: pyvisa returned StatusCode {} &#34;
+                   &#34;({})&#34;.format(custom_err_message, status, str(status)))
+            raise RuntimeError(msg)
+        else:
+            msg = (&#34;Writing/querying command {} failed: pyvisa returned StatusCode&#34;
+                   &#34; {} ({})&#34;.format(command, status, str(status)))
+            raise RuntimeError(msg)
+    return status</code></pre>
+</details>
+</dd>
 <dt id="tektronix_func_gen.FuncGen.close"><code class="name flex">
 <span>def <span class="ident">close</span></span>(<span>self)</span>
 </code></dt>
@@ -2450,7 +2575,7 @@ any normalisation or discretisation</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.query"><code class="name flex">
-<span>def <span class="ident">query</span></span>(<span>self, command)</span>
+<span>def <span class="ident">query</span></span>(<span>self, command, custom_err_message=None)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Query the instrument</p>
@@ -2458,30 +2583,54 @@ any normalisation or discretisation</dd>
 <dl>
 <dt><strong><code>command</code></strong> :&ensp;<code>str</code></dt>
 <dd>The VISA query command</dd>
+<dt><strong><code>custom_err_message</code></strong> :&ensp;<code>str</code>, default <code>None</code></dt>
+<dd>When <code>None</code>, the RuntimeError message is "Writing/querying command
+{command} failed: pyvisa returned StatusCode ..".
+Otherwise, if a message is supplied "Could not {message}:
+pyvisa returned StatusCode .."</dd>
 </dl>
 <h2 id="returns">Returns</h2>
 <dl>
 <dt><code>str</code></dt>
 <dd>The instrument's response</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>RuntimeError</code></dt>
+<dd>If status returned by PyVISA write command is not
+<code>pyvisa.constants.StatusCode.success</code></dd>
 </dl></section>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def query(self, command):
+<pre><code class="python">def query(self, command, custom_err_message=None):
     &#34;&#34;&#34;Query the instrument
 
     Parameters
     ----------
     command : str
         The VISA query command
+    custom_err_message : str, default `None`
+        When `None`, the RuntimeError message is &#34;Writing/querying command
+        {command} failed: pyvisa returned StatusCode ..&#34;.
+        Otherwise, if a message is supplied &#34;Could not {message}:
+        pyvisa returned StatusCode ..&#34;
 
     Returns
     -------
     str
         The instrument&#39;s response
+
+    Raises
+    ------
+    RuntimeError
+        If status returned by PyVISA write command is not
+        `pyvisa.constants.StatusCode.success`
     &#34;&#34;&#34;
-    return self.inst.query(command).strip()</code></pre>
+    response = self.inst.query(command).strip()
+    self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+    return response</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.set_custom_waveform"><code class="name flex">
@@ -2824,8 +2973,8 @@ the waveforms were of different lengths</p></section>
 <dt><strong><code>command</code></strong> :&ensp;<code>str</code></dt>
 <dd>The VISA command to be written to the instrument</dd>
 <dt><strong><code>custom_err_message</code></strong> :&ensp;<code>str</code>, default <code>None</code></dt>
-<dd>When <code>None</code>, the RuntimeError message is "Writing command {command}
-failed: pyvisa returned StatusCode ..".
+<dd>When <code>None</code>, the RuntimeError message is "Writing/querying command
+{command} failed: pyvisa returned StatusCode ..".
 Otherwise, if a message is supplied "Could not {message}:
 pyvisa returned StatusCode .."</dd>
 </dl>
@@ -2833,8 +2982,6 @@ pyvisa returned StatusCode .."</dd>
 <dl>
 <dt><strong><code>bytes</code></strong> :&ensp;<code>int</code></dt>
 <dd>Number of bytes tranferred</dd>
-<dt><strong><code>status</code></strong> :&ensp;<code>pyvisa.constants.StatusCode</code></dt>
-<dd>Return value of the library call</dd>
 </dl>
 <h2 id="raises">Raises</h2>
 <dl>
@@ -2854,8 +3001,8 @@ pyvisa returned StatusCode .."</dd>
     command : str
         The VISA command to be written to the instrument
     custom_err_message : str, default `None`
-        When `None`, the RuntimeError message is &#34;Writing command {command}
-        failed: pyvisa returned StatusCode ..&#34;.
+        When `None`, the RuntimeError message is &#34;Writing/querying command
+        {command} failed: pyvisa returned StatusCode ..&#34;.
         Otherwise, if a message is supplied &#34;Could not {message}:
         pyvisa returned StatusCode ..&#34;
 
@@ -2863,8 +3010,6 @@ pyvisa returned StatusCode .."</dd>
     -------
     bytes : int
         Number of bytes tranferred
-    status : pyvisa.constants.StatusCode
-        Return value of the library call
 
     Raises
     ------
@@ -2872,17 +3017,9 @@ pyvisa returned StatusCode .."</dd>
         If status returned by PyVISA write command is not
         `pyvisa.constants.StatusCode.success`
     &#34;&#34;&#34;
-    num_bytes, status = self.inst.write(command)
-    if not status == pyvisa.constants.StatusCode.success:
-        if custom_err_message is not None:
-            msg = (&#34;Could not {}: pyvisa returned StatusCode {} &#34;
-                   &#34;({})&#34;.format(custom_err_message, status, str(status)))
-            raise RuntimeError(msg)
-        else:
-            msg = (&#34;Writing command {} failed: pyvisa returned StatusCode&#34;
-                   &#34; {} ({})&#34;.format(command, status, str(status)))
-            raise RuntimeError(msg)
-    return num_bytes, status</code></pre>
+    num_bytes = self.inst.write(command)
+    self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+    return num_bytes</code></pre>
 </details>
 </dd>
 </dl>
@@ -4302,6 +4439,7 @@ through a series of prompts</p></section>
 <ul class="">
 <li><code><a title="tektronix_func_gen.FuncGen.check_arb_waveform_length" href="#tektronix_func_gen.FuncGen.check_arb_waveform_length">check_arb_waveform_length</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.check_arb_waveform_type_and_range" href="#tektronix_func_gen.FuncGen.check_arb_waveform_type_and_range">check_arb_waveform_type_and_range</a></code></li>
+<li><code><a title="tektronix_func_gen.FuncGen.check_pyvisa_status" href="#tektronix_func_gen.FuncGen.check_pyvisa_status">check_pyvisa_status</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.close" href="#tektronix_func_gen.FuncGen.close">close</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.get_custom_waveform" href="#tektronix_func_gen.FuncGen.get_custom_waveform">get_custom_waveform</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.get_error" href="#tektronix_func_gen.FuncGen.get_error">get_error</a></code></li>
