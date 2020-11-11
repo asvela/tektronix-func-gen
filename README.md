@@ -1,10 +1,10 @@
 # Tektronix arbitrary function generator control through PyVISA
 
-v0.3.1 // Sep 2020
+v0.4.0 // Nov 2020
 
 API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
-Tested on Win10 with NI-VISA.
+Tested on Win10 with NI-VISA and PyVISA v11.
 
 
 ## Known issues

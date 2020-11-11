@@ -179,8 +179,8 @@ class FuncGen():
         command : str
             The VISA command to be written to the instrument
         custom_err_message : str, default `None`
-            When `None`, the RuntimeError message is "Writing command {command}
-            failed: pyvisa returned StatusCode ..".
+            When `None`, the RuntimeError message is "Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..".
             Otherwise, if a message is supplied "Could not {message}:
             pyvisa returned StatusCode .."
 
@@ -188,6 +188,55 @@ class FuncGen():
         -------
         bytes : int
             Number of bytes tranferred
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        """
+        num_bytes = self.inst.write(command)
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return num_bytes
+
+    def query(self, command, custom_err_message=None):
+        """Query the instrument
+
+        Parameters
+        ----------
+        command : str
+            The VISA query command
+        custom_err_message : str, default `None`
+            When `None`, the RuntimeError message is "Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..".
+            Otherwise, if a message is supplied "Could not {message}:
+            pyvisa returned StatusCode .."
+
+        Returns
+        -------
+        str
+            The instrument's response
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        """
+        response = self.inst.query(command).strip()
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return response
+
+    def check_pyvisa_status(self, command, custom_err_message=None):
+        """Check the last status code of PyVISA
+
+        Parameters
+        ----------
+        command : str
+            The VISA write/query command
+
+        Returns
+        -------
         status : pyvisa.constants.StatusCode
             Return value of the library call
 
@@ -197,32 +246,17 @@ class FuncGen():
             If status returned by PyVISA write command is not
             `pyvisa.constants.StatusCode.success`
         """
-        num_bytes, status = self.inst.write(command)
+        status = self.inst.last_status
         if not status == pyvisa.constants.StatusCode.success:
             if custom_err_message is not None:
                 msg = ("Could not {}: pyvisa returned StatusCode {} "
                        "({})".format(custom_err_message, status, str(status)))
                 raise RuntimeError(msg)
             else:
-                msg = ("Writing command {} failed: pyvisa returned StatusCode"
+                msg = ("Writing/querying command {} failed: pyvisa returned StatusCode"
                        " {} ({})".format(command, status, str(status)))
                 raise RuntimeError(msg)
-        return num_bytes, status
-
-    def query(self, command):
-        """Query the instrument
-
-        Parameters
-        ----------
-        command : str
-            The VISA query command
-
-        Returns
-        -------
-        str
-            The instrument's response
-        """
-        return self.inst.query(command).strip()
+        return status
 
     def get_error(self):
         """Get the contents of the Error/Event queue on the device

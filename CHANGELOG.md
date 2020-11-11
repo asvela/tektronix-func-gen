@@ -1,3 +1,7 @@
+v0.4.0
+- Now compatible with `pyvisa v11.1` as in this version the `write()` will not return the status code anymore
+- Added `check_pyvisa_status()`, now checking status for both queries and writes
+
 v0.3.1
 - Added note about known issue with TekVISA
 - Added more details about flat waveform offset through custom waveform workaround
