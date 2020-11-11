@@ -311,7 +311,7 @@ class FuncGen():
         """Set the settings of both channels with settings dictionaries
 
         (Each channel is turned off before applying the changes to avoid
-        potenitally harmful combinations)
+        potentially harmful combinations)
 
         Parameteres
         -----------
@@ -474,9 +474,7 @@ class FuncGen():
         # Transfer waveform
         self.inst.write_binary_values("DATA:DATA EMEMory,", waveform,
                                       datatype='H', is_big_endian=True)
-        # The first query after the write_binary_values returns '',
-        # so here is a mock query
-        self.query("")
+        # Check for errors and check lengths are matching
         transfer_error = self.get_error()
         emem_wf_length = self.query("DATA:POINts? EMEMory")
         if emem_wf_length == '' or not int(emem_wf_length) == len(waveform):
@@ -1025,14 +1023,14 @@ class FuncGenChannel:
         # Check that the new offset will not violate voltage limits
         min_volt, max_volt = self.get_voltage_lims()
         current_amplitude = self.get_amplitude()
+        offset = self.SI_prefix_to_factor(unit)*offset
         if (current_amplitude/2-offset < min_volt or
             current_amplitude/2+offset > max_volt):
-            msg = ("Could not set the offset {}{unit} as the offset combined"
+            msg = ("Could not set the offset {}V as the offset combined "
                    "with the amplitude ({}V) will be outside the absolute "
-                   "voltage limits [{}, {}]{unit}".format(offset,
-                                                         current_amplitude,
-                                                         min_volt, max_volt,
-                                                         unit=unit))
+                   "voltage limits [{}, {}]V".format(offset,
+                                                     current_amplitude,
+                                                     min_volt, max_volt)
             raise NotSetError(msg)
         # Set the offset
         cmd = "{}VOLTage:LEVel:OFFSet {}{}".format(self.source, offset, unit)
@@ -1052,13 +1050,13 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
     def set_frequency(self, freq, unit="Hz"):
-        """Set the frequency in Hertz (or kHz, MHz, see options)
+        """Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
         Parameters
         ----------
         freq : float
             The resolution is 1 μHz or 12 digits.
-        unit : {Hz, kHz, MHz}, default Hz
+        unit : {mHz, Hz, kHz, MHz}, default Hz
 
         Raises
         ------
@@ -1074,10 +1072,11 @@ class FuncGenChannel:
         else:
             # Check if the given frequency is within the current limits
             min_freq, max_freq = self.get_frequency_lims()
+            freq = self.SI_prefix_to_factor(unit)*freq
             if freq < min_freq or freq > max_freq:
-                msg = ("Could not set the frequency {}{} as it is not within "
+                msg = ("Could not set the frequency {}Hz as it is not within "
                        "the frequency limits set for the instrument [{}, {}]"
-                       "Hz".format(freq, unit, min_freq, max_freq))
+                       "Hz".format(freq, min_freq, max_freq))
                 raise NotSetError(msg)
         # Check that the new amplitude will not violate voltage limits
         min_volt, max_volt = self.get_voltage_lims()
@@ -1145,7 +1144,7 @@ class NotCompatibleError(Exception):
 
 def example_basic_control(address):
     """Example showing how to connect, and the most basic control of the
-    instrument parameteres"""
+    instrument parameters"""
     print("\n\n", example_basic_control.__doc__)
     with FuncGen(address) as fgen:
       fgen.ch1.set_function("SIN")

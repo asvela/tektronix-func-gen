@@ -1,6 +1,9 @@
 v0.4.0
-- Now compatible with `pyvisa v11.1` as in this version the `write()` will not return the status code anymore
+- Ensuring compatibility with `pyvisa v11.1`: ([issue #2](https://github.com/asvela/tektronix-func-gen/issues/2))
+  - PYVISAs `write()` does not return the status code anymore, so the module is modified accordingly
+  - not necessary to have an empty query after `write_binary_values()` in `set_custom_waveform()`
 - Added `check_pyvisa_status()`, now checking status for both queries and writes
+- Bug fixes for `set_frequency()` and `set_offset()` that were previously not taking into account the unit when calculating if it was within the limits
 
 v0.3.1
 - Added note about known issue with TekVISA
