@@ -1,10 +1,10 @@
 # Tektronix arbitrary function generator control through PyVISA
 
-v0.3.1 // Sep 2020
+v0.4.0 // Nov 2020
 
 API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
 
-Tested on Win10 with NI-VISA.
+Tested on Win10 with NI-VISA and PyVISA v1.11 (if using PyVISA <v1.11 use <v0.4 of this module).
 
 
 ## Known issues
@@ -18,7 +18,7 @@ Put the module file in the folder wherein the python file you will import it fro
 
 **Dependencies:**
 - The package needs VISA to be installed. It is tested with NI-VISA, *TekVISA might not work*, see known issues
-- The Python packages `numpy` and `pyvisa` are required
+- The Python packages `numpy` and `pyvisa` (>=v1.11) are required 
 
 
 ## Usage (through examples)

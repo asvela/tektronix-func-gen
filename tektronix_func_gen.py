@@ -179,8 +179,8 @@ class FuncGen():
         command : str
             The VISA command to be written to the instrument
         custom_err_message : str, default `None`
-            When `None`, the RuntimeError message is "Writing command {command}
-            failed: pyvisa returned StatusCode ..".
+            When `None`, the RuntimeError message is "Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..".
             Otherwise, if a message is supplied "Could not {message}:
             pyvisa returned StatusCode .."
 
@@ -188,6 +188,55 @@ class FuncGen():
         -------
         bytes : int
             Number of bytes tranferred
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        """
+        num_bytes = self.inst.write(command)
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return num_bytes
+
+    def query(self, command, custom_err_message=None):
+        """Query the instrument
+
+        Parameters
+        ----------
+        command : str
+            The VISA query command
+        custom_err_message : str, default `None`
+            When `None`, the RuntimeError message is "Writing/querying command
+            {command} failed: pyvisa returned StatusCode ..".
+            Otherwise, if a message is supplied "Could not {message}:
+            pyvisa returned StatusCode .."
+
+        Returns
+        -------
+        str
+            The instrument's response
+
+        Raises
+        ------
+        RuntimeError
+            If status returned by PyVISA write command is not
+            `pyvisa.constants.StatusCode.success`
+        """
+        response = self.inst.query(command).strip()
+        self.check_pyvisa_status(command, custom_err_message=custom_err_message)
+        return response
+
+    def check_pyvisa_status(self, command, custom_err_message=None):
+        """Check the last status code of PyVISA
+
+        Parameters
+        ----------
+        command : str
+            The VISA write/query command
+
+        Returns
+        -------
         status : pyvisa.constants.StatusCode
             Return value of the library call
 
@@ -197,32 +246,17 @@ class FuncGen():
             If status returned by PyVISA write command is not
             `pyvisa.constants.StatusCode.success`
         """
-        num_bytes, status = self.inst.write(command)
+        status = self.inst.last_status
         if not status == pyvisa.constants.StatusCode.success:
             if custom_err_message is not None:
                 msg = ("Could not {}: pyvisa returned StatusCode {} "
                        "({})".format(custom_err_message, status, str(status)))
                 raise RuntimeError(msg)
             else:
-                msg = ("Writing command {} failed: pyvisa returned StatusCode"
+                msg = ("Writing/querying command {} failed: pyvisa returned StatusCode"
                        " {} ({})".format(command, status, str(status)))
                 raise RuntimeError(msg)
-        return num_bytes, status
-
-    def query(self, command):
-        """Query the instrument
-
-        Parameters
-        ----------
-        command : str
-            The VISA query command
-
-        Returns
-        -------
-        str
-            The instrument's response
-        """
-        return self.inst.query(command).strip()
+        return status
 
     def get_error(self):
         """Get the contents of the Error/Event queue on the device
@@ -277,7 +311,7 @@ class FuncGen():
         """Set the settings of both channels with settings dictionaries
 
         (Each channel is turned off before applying the changes to avoid
-        potenitally harmful combinations)
+        potentially harmful combinations)
 
         Parameteres
         -----------
@@ -440,9 +474,7 @@ class FuncGen():
         # Transfer waveform
         self.inst.write_binary_values("DATA:DATA EMEMory,", waveform,
                                       datatype='H', is_big_endian=True)
-        # The first query after the write_binary_values returns '',
-        # so here is a mock query
-        self.query("")
+        # Check for errors and check lengths are matching
         transfer_error = self.get_error()
         emem_wf_length = self.query("DATA:POINts? EMEMory")
         if emem_wf_length == '' or not int(emem_wf_length) == len(waveform):
@@ -991,14 +1023,14 @@ class FuncGenChannel:
         # Check that the new offset will not violate voltage limits
         min_volt, max_volt = self.get_voltage_lims()
         current_amplitude = self.get_amplitude()
+        offset = self.SI_prefix_to_factor(unit)*offset
         if (current_amplitude/2-offset < min_volt or
             current_amplitude/2+offset > max_volt):
-            msg = ("Could not set the offset {}{unit} as the offset combined"
+            msg = ("Could not set the offset {}V as the offset combined "
                    "with the amplitude ({}V) will be outside the absolute "
-                   "voltage limits [{}, {}]{unit}".format(offset,
-                                                         current_amplitude,
-                                                         min_volt, max_volt,
-                                                         unit=unit))
+                   "voltage limits [{}, {}]V".format(offset,
+                                                     current_amplitude,
+                                                     min_volt, max_volt)
             raise NotSetError(msg)
         # Set the offset
         cmd = "{}VOLTage:LEVel:OFFSet {}{}".format(self.source, offset, unit)
@@ -1018,13 +1050,13 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
     def set_frequency(self, freq, unit="Hz"):
-        """Set the frequency in Hertz (or kHz, MHz, see options)
+        """Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
         Parameters
         ----------
         freq : float
             The resolution is 1 μHz or 12 digits.
-        unit : {Hz, kHz, MHz}, default Hz
+        unit : {mHz, Hz, kHz, MHz}, default Hz
 
         Raises
         ------
@@ -1040,10 +1072,11 @@ class FuncGenChannel:
         else:
             # Check if the given frequency is within the current limits
             min_freq, max_freq = self.get_frequency_lims()
+            freq = self.SI_prefix_to_factor(unit)*freq
             if freq < min_freq or freq > max_freq:
-                msg = ("Could not set the frequency {}{} as it is not within "
+                msg = ("Could not set the frequency {}Hz as it is not within "
                        "the frequency limits set for the instrument [{}, {}]"
-                       "Hz".format(freq, unit, min_freq, max_freq))
+                       "Hz".format(freq, min_freq, max_freq))
                 raise NotSetError(msg)
         # Check that the new amplitude will not violate voltage limits
         min_volt, max_volt = self.get_voltage_lims()
@@ -1111,7 +1144,7 @@ class NotCompatibleError(Exception):
 
 def example_basic_control(address):
     """Example showing how to connect, and the most basic control of the
-    instrument parameteres"""
+    instrument parameters"""
     print("\n\n", example_basic_control.__doc__)
     with FuncGen(address) as fgen:
       fgen.ch1.set_function("SIN")
