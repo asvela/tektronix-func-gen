@@ -10,7 +10,7 @@ Tested on Win10 with NI-VISA and PyVISA v1.11 (if using PyVISA <v1.11 use <v0.4 
 ## Known issues
 
 - **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless the Call Monitor application that comes with TekVISA is open and capturing (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)). NI-VISA does not have this issue.
-- The offset of the built-in DC (flat) function cannot be controlled. A workaround is to transfer a flat custom waveform to a memory location, see [Flat function offset control](#flat-function-offset-control) in this readme.
+- There is no VISA command to control the built-in DC (flat) function. A workaround is to transfer a flat custom waveform to a memory location, see [Flat function offset control](#flat-function-offset-control) in this readme.
 
 ## Installation
 
