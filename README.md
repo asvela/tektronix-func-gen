@@ -1,27 +1,37 @@
-# Tektronix arbitrary function generator control through PyVISA
+## Tektronix arbitrary function generator control
 
-v0.4.0 // Nov 2020
+API documentation available [here](https://asvela.github.io/tektronix-func-gen/),
+or in the repository [docs/index.html](docs/index.html). (To build the documentation
+yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run
+`$ python3 pdoc --html -o ./docs/ tektronix_func_gen`.)
 
-API documentation can be found at [GitHub pages](https://asvela.github.io/tektronix-func-gen/) or in the repository [docs/index.html](docs/index.html). (To build the documentation yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run `$ pdoc --html tektronix_func_gen`.)
+Tested on Win10 with NI-VISA and PyVISA v1.11 (if using PyVISA <v1.11 use <v0.4
+of this module).
 
-Tested on Win10 with NI-VISA and PyVISA v1.11 (if using PyVISA <v1.11 use <v0.4 of this module).
 
+### Known issues
 
-## Known issues
+- **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless the
+  Call Monitor application that comes with TekVISA is open and capturing
+  (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)).
+  NI-VISA does not have this issue.
+- The offset of the built-in DC (flat) function cannot be controlled. A
+  workaround is to transfer a flat custom waveform to a memory location,
+  see [Flat function offset control](#flat-function-offset-control) in this readme.
 
-- **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless the Call Monitor application that comes with TekVISA is open and capturing (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)). NI-VISA does not have this issue.
-- The offset of the built-in DC (flat) function cannot be controlled. A workaround is to transfer a flat custom waveform to a memory location, see [Flat function offset control](#flat-function-offset-control) in this readme.
+### Installation
 
-## Installation
-
-Put the module file in the folder wherein the python file you will import it from resides.
+Put the module file in the folder wherein the Python file you will import it
+from resides.
 
 **Dependencies:**
-- The package needs VISA to be installed. It is tested with NI-VISA, *TekVISA might not work*, see known issues
-- The Python packages `numpy` and `pyvisa` (>=v1.11) are required 
+
+  - The package needs VISA to be installed. It is tested with NI-VISA,
+    *TekVISA might not work*, see `Known issues`
+  - The Python packages `numpy` and `pyvisa` (>=v1.11) are required
 
 
-## Usage (through examples)
+### Usage (through examples)
 
 An example of basic control
 
@@ -75,9 +85,10 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
 ```
 
 
-### Syncronisation and frequency lock
+#### Syncronisation and frequency lock
 
-The phase of the two channels can be syncronised with `syncronise_waveforms()`. Frequency lock can also be enabled/disabled with `set_frequency_lock()`:
+The phase of the two channels can be syncronised with `syncronise_waveforms()`.
+Frequency lock can also be enabled/disabled with `set_frequency_lock()`:
 
 ```python
 """Example showing the frequency being set to 10Hz and then the frequency
@@ -89,9 +100,10 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', verbose=False) as fgen:
 ```
 
 
-### Arbitrary waveforms
+#### Arbitrary waveforms
 
-14 bit vertical resolution arbitrary waveforms can be transferred to the 256 available user defined functions on the function generator.
+14 bit vertical resolution arbitrary waveforms can be transferred to the 256
+available user defined functions on the function generator.
 The length of the waveform must be between 2 and 8192 points.
 
 ```python
@@ -115,9 +127,12 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
       fgen.print_settings()
 ```
 
-#### Flat function offset control
+##### Flat function offset control
 
-The offset of the built-in DC function cannot be controlled (the offset command simply does not work, an issue from Tektronix). A workaround is to transfer a flat custom waveform (two or more points of half the vertical range (`arbitrary_waveform_resolution`)) to a memory location:
+The offset of the built-in DC function cannot be controlled (the offset command
+simply does not work, an issue from Tektronix). A workaround is to transfer a
+flat custom waveform (two or more points of half the vertical range
+(`arbitrary_waveform_resolution`)) to a memory location:
 
 ```python
 with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
@@ -130,9 +145,11 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
 Note the `normalise=False` argument.
 
 
-### Set voltage and frequency limits
+#### Set voltage and frequency limits
 
-Limits for amplitude, voltage and frequency for each channel are kept in a dictionary `FuncGenChannel.channel_limits`  (these are the standard limits for AFG1022)
+Limits for amplitude, voltage and frequency for each channel are kept in a
+dictionary `FuncGenChannel.channel_limits` (these are the standard limits
+  for AFG1022)
 
 ```python
 channel_limits = {
@@ -143,7 +160,8 @@ channel_limits = {
                       "highZ": {"min": 0.002, "max": 20}}, "Vpp")}
 ```
 
-They chan be changed by `FuncGenChannel.set_limit()`, or by using the `FuncGenChannel.set_stricter_limits()` for a series of prompts.
+They chan be changed by `FuncGenChannel.set_limit()`, or by using the
+`FuncGenChannel.set_stricter_limits()` for a series of prompts.
 
 ```python
 import tektronix_func_gen as tfg
@@ -163,6 +181,9 @@ with tfg.FuncGen('VISA ADDRESS OF YOUR INSTRUMENT') as fgen:
 ```
 
 
-### Impedance
+#### Impedance
 
-Unfortunately the impedance (50Ω or high Z) cannot be controlled or read remotely. Which setting is in use affects the limits of the output voltage. Use the optional impedance keyword in the initialisation of the func_gen object to make the object aware what limits applies: `FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.
+Unfortunately the impedance (50Ω or high Z) cannot be controlled or read remotely.
+Which setting is in use affects the limits of the output voltage. Use the optional
+impedance keyword in the initialisation of the `FuncGen` object to make the object
+aware what limits applies: `FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', impedance=("highZ", "50ohm"))`.

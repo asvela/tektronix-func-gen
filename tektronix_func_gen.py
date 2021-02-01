@@ -1,24 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-## Tektronix arbitrary function generator control through PyVISA
+.. include:: ./README.md
 
-Andreas Svela 2020
-
-To build the documentation use [pdoc3](https://pdoc3.github.io/pdoc/) and
-run `$ pdoc --html tektronix_func_gen`
-
-Tested on Win10 with NI-VISA.
-
-Todo:
-  * add AM/FM capabilites
-
-Notes:
-  * **For TekVISA users:** a `pyvisa.errors.VI_ERROR_IO` is raised unless
-    the Call Monitor application that comes with TekVISA is open and capturing
-    (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1))
-  * The offset of the built-in DC function cannot be controlled. A workaround
-    is to transfer a flat custom waveform to a memory location, see README.md
-    -> Arbitrary waveforms -> Flat function offset control
 """
 
 import copy
@@ -27,6 +10,43 @@ import numpy as np
 
 
 _VISA_ADDRESS = "USB0::0x0699::0x0353::1731975::INSTR"
+
+
+def _SI_prefix_to_factor(unit):
+    """Convert an SI prefix to a numerical factor
+
+    Parameters
+    ----------
+    unit : str
+        The unit whose first character is checked against the list of
+        prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}
+
+    Returns
+    -------
+    factor : float or `None`
+        The appropriate factor or 1 if not found in the list, or `None`
+        if the unit string is empty
+    """
+    # SI prefix to numerical value
+    SI_conversion = {"M": 1e6, "k": 1e3, "m": 1e-3}
+    try:  # using the unit's first character as key in the dictionary
+        factor = SI_conversion[unit[0]]
+    except KeyError:  # if the entry does not exist
+        factor = 1
+    except IndexError:  # if the unit string is empty
+        factor = None
+        return factor
+
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+
+class NotSetError(Exception):
+    """Error for when a value cannot be written to the instrument"""
+
+
+class NotCompatibleError(Exception):
+    """Error for when the instrument is not compatible with this module"""
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~ FUNCTION GENERATOR CLASS ~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -65,29 +85,6 @@ class FuncGen:
         the instrument
     _inst : `pyvisa.resources.Resource`
         The PyVISA resource
-    channels : tuple of FuncGenChannel
-        Objects to control the channels
-    ch1 : FuncGenChannel
-        Short hand for `channels[0]` Object to control channel 1
-    ch2 : FuncGenChannel
-        Short hand for `channels[1]` Object to control channel 2
-    instrument_limits : dict
-        Contains the following keys with subdictionaries
-        `frequency lims`
-            Containing the frequency limits for the instrument where the keys
-            "min" and "max" have values corresponding to minimum and maximum
-            frequencies in Hz
-        `voltage lims`
-            Contains the maximum absolute voltage the instrument can output
-            for the keys "50ohm" and "highZ" according to the impedance setting
-        `amplitude lims`
-            Contains the smallest and largest possible amplitudes where the
-            keys "50ohm" and "highZ" will have subdictionaries with keys
-            "min" and "max"
-    verify_param_set : bool
-        Verify that a value is successfully set after executing a set function
-    verbose : bool
-        Choose whether to print information such as model upon connecting etc
     _arbitrary_waveform_length : list
         The permitted minimum and maximum length of an arbitrary waveform,
         e.g. [2, 8192]
@@ -105,6 +102,22 @@ class FuncGen:
         use AFG1022 limits)
     """
 
+    instrument_limits = {}
+    """dict: Contains the following keys with subdictionaries
+
+        - `frequency lims`
+          Containing the frequency limits for the instrument where the keys
+          "min" and "max" have values corresponding to minimum and maximum
+          frequencies in Hz
+        - `voltage lims`
+          Contains the maximum absolute voltage the instrument can output
+          for the keys "50ohm" and "highZ" according to the impedance setting
+        - `amplitude lims`
+          Contains the smallest and largest possible amplitudes where the
+          keys "50ohm" and "highZ" will have subdictionaries with keys
+          "min" and "max"
+    """
+
     def __init__(
         self,
         visa_address,
@@ -118,7 +131,9 @@ class FuncGen:
         self._visa_address = visa_address
         self._timeout = timeout
         self.verify_param_set = verify_param_set
+        """bool:  Verify that a value is successfully set after executing a set function"""
         self.verbose = verbose
+        """bool: Choose whether to print information such as model upon connecting etc"""
         try:
             rm = pyvisa.ResourceManager()
             self._inst = rm.open_resource(visa_address)
@@ -146,7 +161,11 @@ class FuncGen:
             self._spawn_channel(1, impedance[0]),
             self._spawn_channel(2, impedance[1]),
         )
-        self.ch1, self.ch2 = self.channels
+        """tuple of `FuncGenChannel`: Objects to control the channels"""
+        self.ch1 = self.channels[0]
+        """`FuncGenChannel`: Short hand for `channels[0]` Object to control channel 1"""
+        self.ch2 = self.channels[1]
+        """`FuncGenChannel`: Short hand for `channels[1]` Object to control channel 2"""
 
     def __enter__(self, **kwargs):
         # The kwargs will be passed on to __init__
@@ -701,30 +720,27 @@ class FuncGenChannel:
     ----------
     _fgen : `FuncGen`
         The function generator object for which the channel exists
-    channel : {1, 2}
-        The channel number
-    impedance : {"50ohm", "highZ"}
-        Determines voltage limits associated with high impedance (whether the
-        instrument is using 50ohm or high Z cannot be controlled through VISA)
+    _channel : {1, 2}
+        The number of the channel this object is addressing
     _source : str
-        "SOURce{}:" where {} is the channel number
-    settings_units : list
-        The units for the settings produced by `FuncGenChannel.get_settings`
-    _state_to_str : dict
-        For conversion from states 1 and 2 to "ON" and "OFF"
+        "SOURce{i}:" where {i} is the channel number
     """
 
-    # Attributes
     _state_to_str = {"1": "ON", "0": "OFF", 1: "ON", 0: "OFF"}
     """Dictionary for converting output states to "ON" and "OFF" """
 
     def __init__(self, fgen, channel, impedance):
         self._fgen = fgen
-        self.channel = channel
+        self._channel = channel
         self._source = f"SOURce{channel}:"
         self.impedance = impedance
+        """{"50ohm", "highZ"}: Determines voltage limits associated with high
+        impedance (whether the instrument is using 50ohm or high Z cannot be
+        controlled through VISA)"""
         # Adopt limits dictionary from instrument
         self.channel_limits = copy.deepcopy(self._fgen.instrument_limits)
+        """Channel limits for the individual channel, same form as
+        `FuncGen.instrument_limits`"""
 
     def _impedance_dependent_limit(self, limit_type):
         """Check if the limit type is impedance dependent (voltages) or
@@ -745,15 +761,12 @@ class FuncGenChannel:
     def set_stricter_limits(self):
         """Set limits for the voltage and frequency limits of the channel output
         through a series of prompts"""
-        print(
-            f"Set stricter voltage and frequency limits "
-            f"for channel {self.channel}"
-        )
+        print(f"Set stricter voltage and frequency limits for channel {self._channel}")
         print("Use enter only to leave a limit unchanged.")
         # Go through the different limits in the instrument_limits dict
         for limit_type, (inst_limit_dict, unit) in self._fgen.instrument_limits.items():
             use_impedance = self._impedance_dependent_limit(limit_type)
-            print("Set {} in {}".format(limit_type, unit), end=" ")
+            print(f"Set {limit_type} in {unit}", end=" ")
             if use_impedance:
                 inst_limit_dict = inst_limit_dict[self.impedance]
                 print(f"[{self.impedance} impedance limit]")
@@ -770,8 +783,10 @@ class FuncGenChannel:
                     try:  # to convert to float
                         new_value = float(new_value)
                     except ValueError:
-                        print(f"\tLimit unchanged: Could not convert '{new_value}' "
-                              f"to float")
+                        print(
+                            f"\tLimit unchanged: Could not convert '{new_value}' "
+                            f"to float"
+                        )
                         continue  # to next item in dict
                     # Set the new limit
                     self.set_limit(limit_type, key, new_value, verbose=True)
@@ -829,17 +844,21 @@ class FuncGenChannel:
         if verbose:  # print description of why the limit was not set
             if larger_than_min:
                 reason = "larger" if bound == "max" else "smaller"
-                print(f"\tNew limit NOT set: {new_value}{unit} is {reason} than "
-                      f"the instrument limit ({inst_value}{unit})")
+                print(
+                    f"\tNew limit NOT set: {new_value}{unit} is {reason} than "
+                    f"the instrument limit ({inst_value}{unit})"
+                )
             else:
-                print(f"\tNew limit NOT set: {new_value}{unit} is smaller than the "
-                      f"current set minimum ({current_min}{unit})")
+                print(
+                    f"\tNew limit NOT set: {new_value}{unit} is smaller than the "
+                    f"current set minimum ({current_min}{unit})"
+                )
         return False
 
     # Get currently used parameters from function generator
     def get_output_state(self):
         """Returns "0" for "OFF", "1" for "ON" """
-        return self._fgen.query(f"OUTPut{self.channel}:STATe?")
+        return self._fgen.query(f"OUTPut{self._channel}:STATe?")
 
     def get_function(self):
         """Returns string of function name"""
@@ -900,7 +919,7 @@ class FuncGenChannel:
         """
         settings = self.get_settings()
         longest_key = max([len(key) for key in settings.keys()])
-        print("\nCurrent settings for channel {}".format(self.channel))
+        print("\nCurrent settings for channel {}".format(self._channel))
         print("==============================")
         for key, (val, unit) in settings.items():
             print("{:>{num_char}s} {} {}".format(key, val, unit, num_char=longest_key))
@@ -942,15 +961,15 @@ class FuncGenChannel:
             applying the set function does not match the value returned by the
             get function
         """
-        err_msg = f"turn channel {self.channel} to state {state}"
+        err_msg = f"turn channel {self._channel} to state {state}"
         self._fgen.write(
-            f"OUTPut{self.channel}:STATe {state}", custom_err_message=err_msg
+            f"OUTPut{self._channel}:STATe {state}", custom_err_message=err_msg
         )
         if self._fgen.verify_param_set:
             actual_state = self.get_output_state()
             if not actual_state == state:
                 msg = (
-                    f"Channel {self.channel} was not turned {state}, it is "
+                    f"Channel {self._channel} was not turned {state}, it is "
                     f"{self._state_to_str[actual_state]}.\n"
                     f"Error from the instrument: {self._fgen.get_error()}"
                 )
@@ -992,7 +1011,7 @@ class FuncGenChannel:
             actual_shape = self.get_function()
             if not actual_shape == shape:
                 msg = (
-                    f"Function {shape} was not set on channel {self.channel}, "
+                    f"Function {shape} was not set on channel {self._channel}, "
                     f"it is {actual_shape}. Check that the function name is "
                     f"correctly spelt. Look up `set_function.__doc__` to see "
                     f"available shapes.\n Error from the instrument: "
@@ -1057,13 +1076,13 @@ class FuncGenChannel:
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
             if not unit == "":
-                check_amplitude = amplitude * self.SI_prefix_to_factor(unit)
+                check_amplitude = amplitude * _SI_prefix_to_factor(unit)
             else:
                 check_amplitude = amplitude
             if not actual_amplitude == check_amplitude:
                 msg = (
                     f"Amplitude {amplitude}{unit} was not set on channel "
-                    f"{self.channel}, it is {actual_amplitude}Vpp. Check that "
+                    f"{self._channel}, it is {actual_amplitude}Vpp. Check that "
                     f" the number is within the possible range and in the "
                     f"correct format.\nError from the instrument: "
                     f"{self._fgen.get_error()}"
@@ -1089,7 +1108,7 @@ class FuncGenChannel:
         # Check that the new offset will not violate voltage limits
         min_volt, max_volt = self.get_voltage_lims()
         current_amplitude = self.get_amplitude()
-        offset = self.SI_prefix_to_factor(unit) * offset
+        offset = _SI_prefix_to_factor(unit) * offset
         if (
             current_amplitude / 2 - offset < min_volt
             or current_amplitude / 2 + offset > max_volt
@@ -1108,11 +1127,11 @@ class FuncGenChannel:
         if self._fgen.verify_param_set:
             actual_offset = self.get_offset()
             # Multiply with the appropriate factor according to SI prefix
-            check_offset = offset * self.SI_prefix_to_factor(unit)
+            check_offset = offset * _SI_prefix_to_factor(unit)
             if not actual_offset == check_offset:
                 msg = (
                     f"Offset {offset}{unit} was not set on channel "
-                    f"{self.channel}, it is {actual_offset}V. Check that the "
+                    f"{self._channel}, it is {actual_offset}V. Check that the "
                     f"number is within the possible range and in the correct "
                     f"format.\nError from the instrument: {self._fgen.get_error()}"
                 )
@@ -1141,7 +1160,7 @@ class FuncGenChannel:
         else:
             # Check if the given frequency is within the current limits
             min_freq, max_freq = self.get_frequency_lims()
-            freq = self.SI_prefix_to_factor(unit) * freq
+            freq = _SI_prefix_to_factor(unit) * freq
             if freq < min_freq or freq > max_freq:
                 msg = (
                     f"Could not set the frequency {freq}Hz as it is not "
@@ -1160,56 +1179,18 @@ class FuncGenChannel:
             # Multiply with the appropriate factor according to SI prefix, or
             # if string is empty, use the value looked up from channel_limits earlier
             if not unit == "":
-                check_freq = freq * self.SI_prefix_to_factor(unit)
+                check_freq = freq * _SI_prefix_to_factor(unit)
             else:
                 check_freq = freq
             if not actual_freq == check_freq:
                 msg = (
-                    f"Frequency {freq}{unit} was not set on channel {self.channel}"
+                    f"Frequency {freq}{unit} was not set on channel {self._channel}"
                     f", it is {actual_freq}Hz. Check that the number is within "
                     f"the possible range and in the correct format.\nError "
                     f"from the instrument: {self._fgen.get_error()}"
                 )
                 raise NotSetError(msg)
 
-    ## ~~~~~~~~~~~~~~~~~~~~~~~ AUXILLIARY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-    @staticmethod
-    def SI_prefix_to_factor(unit):
-        """Convert an SI prefix to a numerical factor
-
-        Parameters
-        ----------
-        unit : str
-            The unit whose first character is checked against the list of
-            prefactors {"M": 1e6, "k": 1e3, "m": 1e-3}
-
-        Returns
-        -------
-        factor : float or `None`
-            The appropriate factor or 1 if not found in the list, or `None`
-            if the unit string is empty
-        """
-        # SI prefix to numerical value
-        SI_conversion = {"M": 1e6, "k": 1e3, "m": 1e-3}
-        try:  # using the unit's first character as key in the dictionary
-            factor = SI_conversion[unit[0]]
-        except KeyError:  # if the entry does not exist
-            factor = 1
-        except IndexError:  # if the unit string is empty
-            factor = None
-        return factor
-
-
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-
-class NotSetError(Exception):
-    """Error for when a value cannot be written to the instrument"""
-
-
-class NotCompatibleError(Exception):
-    """Error for when the instrument is not compatible with this module"""
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ EXAMPLES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
