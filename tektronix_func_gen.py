@@ -7,6 +7,7 @@
 import copy
 import pyvisa
 import numpy as np
+from typing import Tuple, List, Union
 
 
 _VISA_ADDRESS = "USB0::0x0699::0x0353::1731975::INSTR"
@@ -35,7 +36,7 @@ def _SI_prefix_to_factor(unit):
         factor = 1
     except IndexError:  # if the unit string is empty
         factor = None
-        return factor
+    return factor
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -64,17 +65,18 @@ class FuncGen:
         instrument is using 50ohm or high Z cannot be controlled through VISA).
         For example `("highZ", "50ohm")` for to use high Z for ch1 and
         50 ohm for ch2
-    timeout : int, default 5000
+    timeout : int, default 1000
         Timeout in milliseconds of instrument connection
     verify_param_set : bool, default False
         Verify that a value is successfully set after executing a set function
     verbose : bool, default `True`
         Choose whether to print information such as model upon connecting etc
-    override_compatibility : bool, default `False`
+    override_compatibility : str, default `""`
         If the instrument limits for the model connected to are not known
-        `NotCompatibleError` will be raised. To override and use AFG1022 limits,
-        set to `True`. Note that this might lead to unexpected behaviour for
-        custom waveforms and 'MIN'/'MAX' keywords.
+        `NotCompatibleError` will be raised. To override and use either of
+        AFG1022 or AFG3022 limits, use their respecive model names as argument.
+        Note that this might lead to unexpected behaviour for custom waveforms
+        and 'MIN'/'MAX' keywords.
 
     Attributes
     ----------
@@ -91,6 +93,8 @@ class FuncGen:
     _arbitrary_waveform_resolution : int
         The vertical resolution of the arbitrary waveform, for instance 14 bit
         => 2**14-1 = 16383
+    _max_waveform_memory_user_locations : int
+        The number of the last user memory location available
 
     Raises
     ------
@@ -101,6 +105,9 @@ class FuncGen:
         (Call the class with `override_compatibility=True` to override and
         use AFG1022 limits)
     """
+
+    _is_connected = False
+    """bool: Keeping track of whether the PYVISA connection has been established"""
 
     instrument_limits = {}
     """dict: Contains the following keys with subdictionaries
@@ -120,42 +127,20 @@ class FuncGen:
 
     def __init__(
         self,
-        visa_address,
-        impedance=("highZ",) * 2,
-        timeout=5000,
-        verify_param_set=False,
-        override_compatibility=False,
-        verbose=True,
+        visa_address: str,
+        impedance: Tuple[str, str] = ("highZ",) * 2,
+        timeout: int = 1000,
+        verify_param_set: bool = False,
+        override_compatibility: str = "",
+        verbose: bool = True,
     ):
-        self._override_compatibility = override_compatibility
+        self._override_compat = override_compatibility
         self._visa_address = visa_address
-        self._timeout = timeout
         self.verify_param_set = verify_param_set
         """bool:  Verify that a value is successfully set after executing a set function"""
         self.verbose = verbose
         """bool: Choose whether to print information such as model upon connecting etc"""
-        try:
-            rm = pyvisa.ResourceManager()
-            self._inst = rm.open_resource(visa_address)
-        except pyvisa.Error:
-            print(f"\nVisaError: Could not connect to '{visa_address}'")
-            raise
-        self._inst.timeout = self._timeout
-        # Clear all the event registers and queues used in the instrument
-        # status and event reporting system
-        self.write("*CLS")
-        # Get information about the connected device
-        self._id = self.query("*IDN?")
-        # Second query might be needed due to unknown reason
-        # (suspecting *CLS does something weird)
-        if self._id == "":
-            self._id = self.query("*IDN?")
-        self._maker, self._model, self._serial = self._id.split(",")[:3]
-        if self.verbose:
-            print(
-                "Connected to {} model {}, serial"
-                " {}".format(self._maker, self._model, self._serial)
-            )
+        self.open(visa_address, timeout)
         self._initialise_model_properties()
         self.channels = (
             self._spawn_channel(1, impedance[0]),
@@ -177,9 +162,44 @@ class FuncGen:
     def __del__(self):
         self.close()
 
+    def open(self, visa_address: str, timeout: int):
+        try:
+            rm = pyvisa.ResourceManager()
+            self._inst = rm.open_resource(visa_address)
+        except pyvisa.Error:
+            print(f"\nVisaError: Could not connect to '{visa_address}'")
+            raise
+        self._is_connected = True
+        self.timeout = timeout
+        # Clear all the event registers and queues used in the instrument
+        # status and event reporting system
+        self.write("*CLS")
+        # Get information about the connected device
+        self._id = self.query("*IDN?")
+        # Second query might be needed due to unknown reason
+        if self._id == "":
+            self._id = self.query("*IDN?")
+        self._maker, self._model, self._serial = self._id.split(",")[:3]
+        if self.verbose:
+            print(
+                f"Connected to {self._maker} model {self._model}, "
+                f"serial {self._serial}"
+            )
+
     def close(self):
         """Close the connection to the instrument"""
-        self._inst.close()
+        if self._is_connected:
+            self._inst.close()
+            self._is_connected = False
+
+    @property
+    def timeout(self) -> int:
+        """The timeout of the PYVISA connection in milliseconds"""
+        return self._inst.timeout
+
+    @timeout.setter
+    def timeout(self, ms: int):
+        self._inst.timeout = ms
 
     def _initialise_model_properties(self):
         """Initialises the limits of what the instrument can handle according
@@ -191,7 +211,7 @@ class FuncGen:
             If the connected model is not necessarily compatible with this
             package, slimits are not known.
         """
-        if self._model == "AFG1022" or self._override_compatibility:
+        if np.any(["AFG1022" in a for a in [self._model, self._override_compat]]):
             self.instrument_limits = {
                 "frequency lims": ({"min": 1e-6, "max": 25e6}, "Hz"),
                 "voltage lims": (
@@ -208,17 +228,37 @@ class FuncGen:
             }
             self._arbitrary_waveform_length = [2, 8192]  # min length, max length
             self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 255
+        elif np.any(["AFG3022" in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                "frequency lims": ({"min": 1e-6, "max": 25e6}, "Hz"),
+                "voltage lims": (
+                    {"50ohm": {"min": -5, "max": 5}, "highZ": {"min": -10, "max": 10}},
+                    "V",
+                ),
+                "amplitude lims": (
+                    {
+                        "50ohm": {"min": 0.01, "max": 10},
+                        "highZ": {"min": 0.02, "max": 20},
+                    },
+                    "Vpp",
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 65536]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 4
         else:
             msg = (
-                "Model {} not supported, no limits set!"
-                "\n\tTo use the limits for AFG1022, call the class with "
-                "'override_compatibility=True'"
-                "\n\tNote that this might lead to unexpected behaviour "
-                "for custom waveforms and 'MIN'/'MAX' keywords."
+                f"Model {self._model} might not be fully supported!\n"
+                "  The module has been tested with AFG1022 and AFG3022.\n"
+                "  To initiate and use the module as any of these, call the\n"
+                "  class with for instance `override_compatibility='AFG1022'`\n"
+                "  Note that this might lead to unexpected behaviour\n"
+                "  for custom waveforms and 'MIN'/'MAX' keywords."
             )
             raise NotCompatibleError(msg)
 
-    def write(self, command, custom_err_message=None):
+    def write(self, command: str, custom_err_message: str = None) -> int:
         """Write a VISA command to the instrument
 
         Parameters
@@ -246,7 +286,7 @@ class FuncGen:
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return num_bytes
 
-    def query(self, command, custom_err_message=None):
+    def query(self, command: str, custom_err_message: str = None) -> str:
         """Query the instrument
 
         Parameters
@@ -274,7 +314,7 @@ class FuncGen:
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return response
 
-    def _check_pyvisa_status(self, command, custom_err_message=None):
+    def _check_pyvisa_status(self, command: str, custom_err_message: str = None):
         """Check the last status code of PyVISA
 
         Parameters
@@ -308,7 +348,7 @@ class FuncGen:
             raise RuntimeError(msg)
         return status
 
-    def get_error(self):
+    def get_error(self) -> str:
         """Get the contents of the Error/Event queue on the device
 
         Returns
@@ -318,12 +358,12 @@ class FuncGen:
         """
         return self.query("SYSTEM:ERROR:NEXT?")
 
-    def _spawn_channel(self, channel, impedance):
+    def _spawn_channel(self, channel: int, impedance: str) -> "FuncGenChannel":
         """Wrapper function to create a `FuncGenChannel` object for
         a channel -- see the class docstring"""
         return FuncGenChannel(self, channel, impedance)
 
-    def get_settings(self):
+    def get_settings(self) -> List[dict]:
         """Get dictionaries of the current settings of the two channels
 
         Returns
@@ -358,7 +398,7 @@ class FuncGen:
                 row_format.format(ch1key, str(ch1val), str(ch2val), unit, padd=padding)
             )
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: List[dict]):
         """Set the settings of both channels with settings dictionaries
 
         (Each channel is turned off before applying the changes to avoid
@@ -382,7 +422,7 @@ class FuncGen:
         """
         self.write(":PHAS:INIT", custom_err_message="syncronise waveforms")
 
-    def get_frequency_lock(self):
+    def get_frequency_lock(self) -> bool:
         """Check if frequency lock is enabled
 
         Returns
@@ -393,7 +433,7 @@ class FuncGen:
         # If one is locked so is the other, so just need to check one
         return int(self.query("SOURCE1:FREQuency:CONCurrent?")) == 1
 
-    def set_frequency_lock(self, state, use_channel=1):
+    def set_frequency_lock(self, state: str, use_channel: int = 1):
         """Enable the frequency lock to make the two channels have the same
         frequency and phase of their signals, also after adjustments.
 
@@ -432,7 +472,7 @@ class FuncGen:
 
     ## ~~~~~~~~~~~~~~~~~~~~~ CUSTOM WAVEFORM FUNCTIONS ~~~~~~~~~~~~~~~~~~~~~ ##
 
-    def get_waveform_catalogue(self):
+    def get_waveform_catalogue(self) -> List[str]:
         """Get list of the waveforms that are in use (not empty)
 
         Returns
@@ -444,7 +484,7 @@ class FuncGen:
         catalogue = [wf[1:-1] for wf in catalogue]  # strip off extra quotes
         return catalogue
 
-    def get_custom_waveform(self, memory_num):
+    def get_custom_waveform(self, memory_num: int) -> np.ndarray:
         """Get the waveform currently stored in USER<memory_num>
 
         Parameters
@@ -483,7 +523,12 @@ class FuncGen:
         return np.array([])
 
     def set_custom_waveform(
-        self, waveform, normalise=True, memory_num=0, verify=True, print_progress=True
+        self,
+        waveform: np.ndarray,
+        normalise: bool = True,
+        memory_num: int = 0,
+        verify: bool = True,
+        print_progress: bool = True,
     ):
         """Transfer waveform data to edit memory and then user memory.
         NOTE: Will overwrite without warnings
@@ -515,6 +560,11 @@ class FuncGen:
             If the waveform transferred to the instrument is of a different
             length than the waveform supplied
         """
+        if not 0 <= memory_num <= self._max_waveform_memory_user_locations:
+            raise ValueError(
+                f"The memory location {memory_num} is not a valid "
+                "memory location for this model"
+            )
         # Check if waveform data is suitable
         if print_progress:
             print("Check if waveform data is suitable..", end=" ")
@@ -553,17 +603,21 @@ class FuncGen:
             if print_progress:
                 print(f"Verify waveform USER{memory_num}..")
             if f"USER{memory_num}" in self.get_waveform_catalogue():
-                self._verify_waveform(
+                verif = self._verify_waveform(
                     waveform,
                     memory_num,
                     normalise=normalise,
                     print_result=print_progress,
                 )
+                if not verif[0]:
+                    raise RuntimeError(
+                        f"USER{memory_num} does not contain the waveform"
+                    )
             else:
-                print(f"(!) USER{memory_num} is empty")
+                raise RuntimeError(f"USER{memory_num} is empty")
         return waveform
 
-    def _normalise_to_waveform(self, shape):
+    def _normalise_to_waveform(self, shape: np.ndarray) -> np.ndarray:
         """Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
 
@@ -592,7 +646,13 @@ class FuncGen:
         waveform = waveform / normalisation_factor * self._arbitrary_waveform_resolution
         return waveform.astype(np.uint16)
 
-    def _verify_waveform(self, waveform, memory_num, normalise=True, print_result=True):
+    def _verify_waveform(
+        self,
+        waveform: np.ndarray,
+        memory_num: int,
+        normalise: bool = True,
+        print_result: bool = True,
+    ) -> Tuple[bool, np.ndarray, list]:
         """Compare a waveform in user memory to argument waveform
 
         Parameters
@@ -648,7 +708,7 @@ class FuncGen:
             )
         return False, instrument_waveform, not_equal
 
-    def _check_arb_waveform_length(self, waveform):
+    def _check_arb_waveform_length(self, waveform: np.ndarray):
         """Checks if waveform is within the acceptable length
 
         Parameters
@@ -671,7 +731,7 @@ class FuncGen:
             )
             raise ValueError(msg)
 
-    def _check_arb_waveform_type_and_range(self, waveform):
+    def _check_arb_waveform_type_and_range(self, waveform: np.ndarray):
         """Checks if waveform is of int/np.int32 type and within the resolution
         of the function generator
 
@@ -729,7 +789,7 @@ class FuncGenChannel:
     _state_to_str = {"1": "ON", "0": "OFF", 1: "ON", 0: "OFF"}
     """Dictionary for converting output states to "ON" and "OFF" """
 
-    def __init__(self, fgen, channel, impedance):
+    def __init__(self, fgen: FuncGen, channel: int, impedance: str):
         self._fgen = fgen
         self._channel = channel
         self._source = f"SOURce{channel}:"
@@ -742,7 +802,7 @@ class FuncGenChannel:
         """Channel limits for the individual channel, same form as
         `FuncGen.instrument_limits`"""
 
-    def _impedance_dependent_limit(self, limit_type):
+    def _impedance_dependent_limit(self, limit_type: str) -> bool:
         """Check if the limit type is impedance dependent (voltages) or
         not (frequency)
 
@@ -791,7 +851,9 @@ class FuncGenChannel:
                     # Set the new limit
                     self.set_limit(limit_type, key, new_value, verbose=True)
 
-    def set_limit(self, limit_type, bound, new_value, verbose=False):
+    def set_limit(
+        self, limit_type: str, bound: str, new_value: float, verbose: bool = False
+    ) -> bool:
         """Set a limit if the new value is within the instrument limits and are
         self consistent (max larger than min)
 
@@ -856,46 +918,46 @@ class FuncGenChannel:
         return False
 
     # Get currently used parameters from function generator
-    def get_output_state(self):
-        """Returns "0" for "OFF", "1" for "ON" """
-        return self._fgen.query(f"OUTPut{self._channel}:STATe?")
+    def get_output_state(self) -> int:
+        """Returns 0 for "OFF", 1 for "ON" """
+        return int(self._fgen.query(f"OUTPut{self._channel}:STATe?"))
 
-    def get_function(self):
+    def get_function(self) -> str:
         """Returns string of function name"""
         return self._fgen.query(f"{self._source}FUNCtion:SHAPe?")
 
-    def get_amplitude(self):
+    def get_amplitude(self) -> float:
         """Returns peak-to-peak voltage in volts"""
         return float(self._fgen.query(f"{self._source}VOLTage:AMPLitude?"))
 
-    def get_offset(self):
+    def get_offset(self) -> float:
         """Returns offset voltage in volts"""
         return float(self._fgen.query(f"{self._source}VOLTage:OFFSet?"))
 
-    def get_frequency(self):
+    def get_frequency(self) -> float:
         """Returns frequency in Hertz"""
         return float(self._fgen.query(f"{self._source}FREQuency?"))
 
     # Get limits set in the channel class
-    def get_frequency_lims(self):
+    def get_frequency_lims(self) -> List[float]:
         """Returns list of min and max frequency limits"""
         return [self.channel_limits["frequency lims"][0][key] for key in ["min", "max"]]
 
-    def get_voltage_lims(self):
+    def get_voltage_lims(self) -> List[float]:
         """Returns list of min and max voltage limits for the current impedance"""
         return [
             self.channel_limits["voltage lims"][0][self.impedance][key]
             for key in ["min", "max"]
         ]
 
-    def get_amplitude_lims(self):
+    def get_amplitude_lims(self) -> List[float]:
         """Returns list of min and max amplitude limits for the current impedance"""
         return [
             self.channel_limits["amplitude lims"][0][self.impedance][key]
             for key in ["min", "max"]
         ]
 
-    def get_settings(self):
+    def get_settings(self) -> dict:
         """Get the settings for the channel
 
         Returns
@@ -924,7 +986,7 @@ class FuncGenChannel:
         for key, (val, unit) in settings.items():
             print("{:>{num_char}s} {} {}".format(key, val, unit, num_char=longest_key))
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: dict):
         """Set the settings of the channel with a settings dictionary. Will
         set the outout to OFF before applyign the settings (and turn the
         channel ON or leave it OFF depending on the settings dict)
@@ -945,7 +1007,7 @@ class FuncGenChannel:
         self.set_frequency(settings["frequency"][0])
         self.set_output_state(settings["output"][0])
 
-    def set_output_state(self, state):
+    def set_output_state(self, state: Union[int, str]):
         """Enables or diables the output of the channel
 
         Parameters
@@ -975,15 +1037,15 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def get_output(self):
+    def get_output(self) -> int:
         """Wrapper for get_output_state"""
         return self.get_output_state()
 
-    def set_output(self, state):
+    def set_output(self, state: Union[int, str]):
         """Wrapper for set_output_state"""
         self.set_output_state(state)
 
-    def set_function(self, shape):
+    def set_function(self, shape: str):
         """Set the function shape of the output
 
         Parameters
@@ -1019,7 +1081,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_amplitude(self, amplitude):
+    def set_amplitude(self, amplitude: float):
         """Set the peak-to-peak amplitude in volts
 
         Parameters
@@ -1089,7 +1151,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_offset(self, offset, unit="V"):
+    def set_offset(self, offset: float, unit: str = "V"):
         """Set offset in volts (or mV, see options)
 
         Parameters
@@ -1137,7 +1199,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_frequency(self, freq, unit="Hz"):
+    def set_frequency(self, freq: float, unit: str = "Hz"):
         """Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
         Parameters
@@ -1192,11 +1254,10 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
 
-
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ EXAMPLES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 
-def example_basic_control(address):
+def example_basic_control(address: str):
     """Example showing how to connect, and the most basic control of the
     instrument parameters"""
     print("\n\n", example_basic_control.__doc__)
@@ -1211,7 +1272,7 @@ def example_basic_control(address):
         fgen.print_settings()
 
 
-def example_change_settings(address):
+def example_change_settings(address: str):
     """Example showing how to get the current settings of the instrument,
     store them, change a setting and then restore the initial settings"""
     print("\n\n", example_change_settings.__doc__)
@@ -1227,7 +1288,7 @@ def example_change_settings(address):
         fgen.print_settings()
 
 
-def example_lock_frequencies(address):
+def example_lock_frequencies(address: str):
     """Example showing the frequency being set to 10Hz and then the frequency
     lock enabled, using the frequency at ch1 as the common frequency"""
     print("\n\n", example_lock_frequencies.__doc__)
@@ -1236,7 +1297,7 @@ def example_lock_frequencies(address):
         fgen.set_frequency_lock("ON", use_channel=1)
 
 
-def example_changing_limits(address):
+def example_changing_limits(address: str):
     """Example showing how limits can be read and changed"""
     print("\n\n", example_changing_limits.__doc__)
     with FuncGen(address) as fgen:
@@ -1254,7 +1315,10 @@ def example_changing_limits(address):
 
 
 def example_set_and_use_custom_waveform(
-    fgen=None, address=None, channel=1, plot_signal=True
+    fgen: FuncGen = None,
+    address: str = None,
+    channel: int = 1,
+    plot_signal: bool = True,
 ):
     """Example showing a waveform being created, transferred to the instrument,
     and applied to a channel"""

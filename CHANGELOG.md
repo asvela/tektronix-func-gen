@@ -16,13 +16,23 @@ v0.5
       - `_arbitrary_waveform_length`
       - `_arbitrary_waveform_resolution`
       - `_override_compatibility`
-      - `_timeout`
       - `_maker`
       - `_serial`
       - `_model`
     - `FuncGenChannel`
       - `_source`
       - `state_str` -> `_state_to_str`
+- Adding support for AFG3022
+- Type hints across the module
+- RuntimeError raised if `set_custom_waveform` is unable to verify the 
+  waveform
+- Adding an attribute for `_max_waveform_memory_user_locations` and checking
+  that the memory location is within this boundary when setting a new custom
+  waveform
+- The`override_compatibility` argument supports a string argument to select 
+  which model's limits to adopt
+- Avoiding close on `__del__` or `__exit__` if the connection has already been closed
+- Making a property out of `timeout`
 - Moving `SI_prefix_to_factor()` out of the class, now a private module function
 - Moving to `f""`-strings from `"".format()`
 
