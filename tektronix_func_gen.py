@@ -74,9 +74,9 @@ class FuncGen:
     override_compatibility : str, default `""`
         If the instrument limits for the model connected to are not known
         `NotCompatibleError` will be raised. To override and use either of
-        AFG1022 or AFG3022 limits, use their respecive model names as argument.
-        Note that this might lead to unexpected behaviour for custom waveforms
-        and 'MIN'/'MAX' keywords.
+        AFG1022, AFG1062, or AFG3022 limits, use their respecive model names as
+        argument. Note that this might lead to unexpected behaviour for custom
+        waveforms and 'MIN'/'MAX' keywords.
 
     Attributes
     ----------
@@ -229,6 +229,24 @@ class FuncGen:
             self._arbitrary_waveform_length = [2, 8192]  # min length, max length
             self._arbitrary_waveform_resolution = 16383  # 14 bit
             self._max_waveform_memory_user_locations = 255
+        elif np.any(["AFG1062" in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                "frequency lims": ({"min": 1e-6, "max": 60e6}, "Hz"),
+                "voltage lims": (
+                    {"50ohm": {"min": -5, "max": 5}, "highZ": {"min": -10, "max": 10}},
+                    "V",
+                ),
+                "amplitude lims": (
+                    {
+                        "50ohm": {"min": 0.001, "max": 10},
+                        "highZ": {"min": 0.002, "max": 20},
+                    },
+                    "Vpp",
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 1e6]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 31
         elif np.any(["AFG3022" in a for a in [self._model, self._override_compat]]):
             self.instrument_limits = {
                 "frequency lims": ({"min": 1e-6, "max": 25e6}, "Hz"),
@@ -250,7 +268,7 @@ class FuncGen:
         else:
             msg = (
                 f"Model {self._model} might not be fully supported!\n"
-                "  The module has been tested with AFG1022 and AFG3022.\n"
+                "  The module has been tested with AFG1022, AFG1062, and AFG3022.\n"
                 "  To initiate and use the module as any of these, call the\n"
                 "  class with for instance `override_compatibility='AFG1022'`\n"
                 "  Note that this might lead to unexpected behaviour\n"

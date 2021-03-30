@@ -25,6 +25,10 @@
 <h2 id="tektronix-arbitrary-function-generator-control">Tektronix arbitrary function generator control</h2>
 <p><a href="https://www.codefactor.io/repository/github/asvela/tektronix-func-gen"><img alt="CodeFactor Grade" src="https://img.shields.io/codefactor/grade/github/asvela/tektronix-func-gen?style=flat-square"></a>
 <a href="https://github.com/asvela/dlc-control/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/asvela/dlc-control?style=flat-square"></a></p>
+<p>Provides basic control of AFG1000 and AFG3000 series Tektronix Arbitrary Function
+Generators, possibly also others. This includes setting basic settings such as
+selecting functions, transferring or selecting custom waveforms, amplitude and offset
+control, phase syncronisation and frequency locking.</p>
 <p>API documentation available <a href="https://asvela.github.io/tektronix-func-gen/">here</a>,
 or in the repository <a href="docs/index.html">docs/index.html</a>. (To build the documentation
 yourself use <a href="https://pdoc3.github.io/pdoc/">pdoc3</a> and run
@@ -37,9 +41,12 @@ of this module).</p>
 Call Monitor application that comes with TekVISA is open and capturing
 (see issue <a href="https://github.com/asvela/tektronix-func-gen/issues/1">#1</a>).
 NI-VISA does not have this issue.</li>
-<li>The offset of the built-in DC (flat) function cannot be controlled. A
+<li>The offset of the built-in DC (flat) function cannot be controlled directly. A
 workaround is to transfer a flat custom waveform to a memory location,
 see <a href="#flat-function-offset-control">Flat function offset control</a> in this readme.</li>
+<li>The frequency limits can in practice be stricter than what is set by the module,
+as the module is using the limits for a sine, where as other functions, such as
+ramp might have lower limit</li>
 </ul>
 <h3 id="installation">Installation</h3>
 <p>Put the module file in the folder wherein the Python file you will import it
@@ -184,6 +191,7 @@ aware what limits applies: <code>FuncGen('VISA ADDRESS OF YOUR INSTRUMENT', impe
 import copy
 import pyvisa
 import numpy as np
+from typing import Tuple, List, Union
 
 
 _VISA_ADDRESS = &#34;USB0::0x0699::0x0353::1731975::INSTR&#34;
@@ -212,7 +220,7 @@ def _SI_prefix_to_factor(unit):
         factor = 1
     except IndexError:  # if the unit string is empty
         factor = None
-        return factor
+    return factor
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ERROR CLASSES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -241,17 +249,18 @@ class FuncGen:
         instrument is using 50ohm or high Z cannot be controlled through VISA).
         For example `(&#34;highZ&#34;, &#34;50ohm&#34;)` for to use high Z for ch1 and
         50 ohm for ch2
-    timeout : int, default 5000
+    timeout : int, default 1000
         Timeout in milliseconds of instrument connection
     verify_param_set : bool, default False
         Verify that a value is successfully set after executing a set function
     verbose : bool, default `True`
         Choose whether to print information such as model upon connecting etc
-    override_compatibility : bool, default `False`
+    override_compatibility : str, default `&#34;&#34;`
         If the instrument limits for the model connected to are not known
-        `NotCompatibleError` will be raised. To override and use AFG1022 limits,
-        set to `True`. Note that this might lead to unexpected behaviour for
-        custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.
+        `NotCompatibleError` will be raised. To override and use either of
+        AFG1022, AFG1062, or AFG3022 limits, use their respecive model names as
+        argument. Note that this might lead to unexpected behaviour for custom
+        waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.
 
     Attributes
     ----------
@@ -268,6 +277,8 @@ class FuncGen:
     _arbitrary_waveform_resolution : int
         The vertical resolution of the arbitrary waveform, for instance 14 bit
         =&gt; 2**14-1 = 16383
+    _max_waveform_memory_user_locations : int
+        The number of the last user memory location available
 
     Raises
     ------
@@ -278,6 +289,9 @@ class FuncGen:
         (Call the class with `override_compatibility=True` to override and
         use AFG1022 limits)
     &#34;&#34;&#34;
+
+    _is_connected = False
+    &#34;&#34;&#34;bool: Keeping track of whether the PYVISA connection has been established&#34;&#34;&#34;
 
     instrument_limits = {}
     &#34;&#34;&#34;dict: Contains the following keys with subdictionaries
@@ -297,42 +311,20 @@ class FuncGen:
 
     def __init__(
         self,
-        visa_address,
-        impedance=(&#34;highZ&#34;,) * 2,
-        timeout=5000,
-        verify_param_set=False,
-        override_compatibility=False,
-        verbose=True,
+        visa_address: str,
+        impedance: Tuple[str, str] = (&#34;highZ&#34;,) * 2,
+        timeout: int = 1000,
+        verify_param_set: bool = False,
+        override_compatibility: str = &#34;&#34;,
+        verbose: bool = True,
     ):
-        self._override_compatibility = override_compatibility
+        self._override_compat = override_compatibility
         self._visa_address = visa_address
-        self._timeout = timeout
         self.verify_param_set = verify_param_set
         &#34;&#34;&#34;bool:  Verify that a value is successfully set after executing a set function&#34;&#34;&#34;
         self.verbose = verbose
         &#34;&#34;&#34;bool: Choose whether to print information such as model upon connecting etc&#34;&#34;&#34;
-        try:
-            rm = pyvisa.ResourceManager()
-            self._inst = rm.open_resource(visa_address)
-        except pyvisa.Error:
-            print(f&#34;\nVisaError: Could not connect to &#39;{visa_address}&#39;&#34;)
-            raise
-        self._inst.timeout = self._timeout
-        # Clear all the event registers and queues used in the instrument
-        # status and event reporting system
-        self.write(&#34;*CLS&#34;)
-        # Get information about the connected device
-        self._id = self.query(&#34;*IDN?&#34;)
-        # Second query might be needed due to unknown reason
-        # (suspecting *CLS does something weird)
-        if self._id == &#34;&#34;:
-            self._id = self.query(&#34;*IDN?&#34;)
-        self._maker, self._model, self._serial = self._id.split(&#34;,&#34;)[:3]
-        if self.verbose:
-            print(
-                &#34;Connected to {} model {}, serial&#34;
-                &#34; {}&#34;.format(self._maker, self._model, self._serial)
-            )
+        self.open(visa_address, timeout)
         self._initialise_model_properties()
         self.channels = (
             self._spawn_channel(1, impedance[0]),
@@ -354,9 +346,44 @@ class FuncGen:
     def __del__(self):
         self.close()
 
+    def open(self, visa_address: str, timeout: int):
+        try:
+            rm = pyvisa.ResourceManager()
+            self._inst = rm.open_resource(visa_address)
+        except pyvisa.Error:
+            print(f&#34;\nVisaError: Could not connect to &#39;{visa_address}&#39;&#34;)
+            raise
+        self._is_connected = True
+        self.timeout = timeout
+        # Clear all the event registers and queues used in the instrument
+        # status and event reporting system
+        self.write(&#34;*CLS&#34;)
+        # Get information about the connected device
+        self._id = self.query(&#34;*IDN?&#34;)
+        # Second query might be needed due to unknown reason
+        if self._id == &#34;&#34;:
+            self._id = self.query(&#34;*IDN?&#34;)
+        self._maker, self._model, self._serial = self._id.split(&#34;,&#34;)[:3]
+        if self.verbose:
+            print(
+                f&#34;Connected to {self._maker} model {self._model}, &#34;
+                f&#34;serial {self._serial}&#34;
+            )
+
     def close(self):
         &#34;&#34;&#34;Close the connection to the instrument&#34;&#34;&#34;
-        self._inst.close()
+        if self._is_connected:
+            self._inst.close()
+            self._is_connected = False
+
+    @property
+    def timeout(self) -&gt; int:
+        &#34;&#34;&#34;The timeout of the PYVISA connection in milliseconds&#34;&#34;&#34;
+        return self._inst.timeout
+
+    @timeout.setter
+    def timeout(self, ms: int):
+        self._inst.timeout = ms
 
     def _initialise_model_properties(self):
         &#34;&#34;&#34;Initialises the limits of what the instrument can handle according
@@ -368,7 +395,7 @@ class FuncGen:
             If the connected model is not necessarily compatible with this
             package, slimits are not known.
         &#34;&#34;&#34;
-        if self._model == &#34;AFG1022&#34; or self._override_compatibility:
+        if np.any([&#34;AFG1022&#34; in a for a in [self._model, self._override_compat]]):
             self.instrument_limits = {
                 &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 25e6}, &#34;Hz&#34;),
                 &#34;voltage lims&#34;: (
@@ -385,17 +412,55 @@ class FuncGen:
             }
             self._arbitrary_waveform_length = [2, 8192]  # min length, max length
             self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 255
+        elif np.any([&#34;AFG1062&#34; in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 60e6}, &#34;Hz&#34;),
+                &#34;voltage lims&#34;: (
+                    {&#34;50ohm&#34;: {&#34;min&#34;: -5, &#34;max&#34;: 5}, &#34;highZ&#34;: {&#34;min&#34;: -10, &#34;max&#34;: 10}},
+                    &#34;V&#34;,
+                ),
+                &#34;amplitude lims&#34;: (
+                    {
+                        &#34;50ohm&#34;: {&#34;min&#34;: 0.001, &#34;max&#34;: 10},
+                        &#34;highZ&#34;: {&#34;min&#34;: 0.002, &#34;max&#34;: 20},
+                    },
+                    &#34;Vpp&#34;,
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 1e6]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 31
+        elif np.any([&#34;AFG3022&#34; in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 25e6}, &#34;Hz&#34;),
+                &#34;voltage lims&#34;: (
+                    {&#34;50ohm&#34;: {&#34;min&#34;: -5, &#34;max&#34;: 5}, &#34;highZ&#34;: {&#34;min&#34;: -10, &#34;max&#34;: 10}},
+                    &#34;V&#34;,
+                ),
+                &#34;amplitude lims&#34;: (
+                    {
+                        &#34;50ohm&#34;: {&#34;min&#34;: 0.01, &#34;max&#34;: 10},
+                        &#34;highZ&#34;: {&#34;min&#34;: 0.02, &#34;max&#34;: 20},
+                    },
+                    &#34;Vpp&#34;,
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 65536]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 4
         else:
             msg = (
-                &#34;Model {} not supported, no limits set!&#34;
-                &#34;\n\tTo use the limits for AFG1022, call the class with &#34;
-                &#34;&#39;override_compatibility=True&#39;&#34;
-                &#34;\n\tNote that this might lead to unexpected behaviour &#34;
-                &#34;for custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.&#34;
+                f&#34;Model {self._model} might not be fully supported!\n&#34;
+                &#34;  The module has been tested with AFG1022, AFG1062, and AFG3022.\n&#34;
+                &#34;  To initiate and use the module as any of these, call the\n&#34;
+                &#34;  class with for instance `override_compatibility=&#39;AFG1022&#39;`\n&#34;
+                &#34;  Note that this might lead to unexpected behaviour\n&#34;
+                &#34;  for custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.&#34;
             )
             raise NotCompatibleError(msg)
 
-    def write(self, command, custom_err_message=None):
+    def write(self, command: str, custom_err_message: str = None) -&gt; int:
         &#34;&#34;&#34;Write a VISA command to the instrument
 
         Parameters
@@ -423,7 +488,7 @@ class FuncGen:
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return num_bytes
 
-    def query(self, command, custom_err_message=None):
+    def query(self, command: str, custom_err_message: str = None) -&gt; str:
         &#34;&#34;&#34;Query the instrument
 
         Parameters
@@ -451,7 +516,7 @@ class FuncGen:
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return response
 
-    def _check_pyvisa_status(self, command, custom_err_message=None):
+    def _check_pyvisa_status(self, command: str, custom_err_message: str = None):
         &#34;&#34;&#34;Check the last status code of PyVISA
 
         Parameters
@@ -485,7 +550,7 @@ class FuncGen:
             raise RuntimeError(msg)
         return status
 
-    def get_error(self):
+    def get_error(self) -&gt; str:
         &#34;&#34;&#34;Get the contents of the Error/Event queue on the device
 
         Returns
@@ -495,12 +560,12 @@ class FuncGen:
         &#34;&#34;&#34;
         return self.query(&#34;SYSTEM:ERROR:NEXT?&#34;)
 
-    def _spawn_channel(self, channel, impedance):
+    def _spawn_channel(self, channel: int, impedance: str) -&gt; &#34;FuncGenChannel&#34;:
         &#34;&#34;&#34;Wrapper function to create a `FuncGenChannel` object for
         a channel -- see the class docstring&#34;&#34;&#34;
         return FuncGenChannel(self, channel, impedance)
 
-    def get_settings(self):
+    def get_settings(self) -&gt; List[dict]:
         &#34;&#34;&#34;Get dictionaries of the current settings of the two channels
 
         Returns
@@ -535,7 +600,7 @@ class FuncGen:
                 row_format.format(ch1key, str(ch1val), str(ch2val), unit, padd=padding)
             )
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: List[dict]):
         &#34;&#34;&#34;Set the settings of both channels with settings dictionaries
 
         (Each channel is turned off before applying the changes to avoid
@@ -559,7 +624,7 @@ class FuncGen:
         &#34;&#34;&#34;
         self.write(&#34;:PHAS:INIT&#34;, custom_err_message=&#34;syncronise waveforms&#34;)
 
-    def get_frequency_lock(self):
+    def get_frequency_lock(self) -&gt; bool:
         &#34;&#34;&#34;Check if frequency lock is enabled
 
         Returns
@@ -570,7 +635,7 @@ class FuncGen:
         # If one is locked so is the other, so just need to check one
         return int(self.query(&#34;SOURCE1:FREQuency:CONCurrent?&#34;)) == 1
 
-    def set_frequency_lock(self, state, use_channel=1):
+    def set_frequency_lock(self, state: str, use_channel: int = 1):
         &#34;&#34;&#34;Enable the frequency lock to make the two channels have the same
         frequency and phase of their signals, also after adjustments.
 
@@ -609,7 +674,7 @@ class FuncGen:
 
     ## ~~~~~~~~~~~~~~~~~~~~~ CUSTOM WAVEFORM FUNCTIONS ~~~~~~~~~~~~~~~~~~~~~ ##
 
-    def get_waveform_catalogue(self):
+    def get_waveform_catalogue(self) -&gt; List[str]:
         &#34;&#34;&#34;Get list of the waveforms that are in use (not empty)
 
         Returns
@@ -621,7 +686,7 @@ class FuncGen:
         catalogue = [wf[1:-1] for wf in catalogue]  # strip off extra quotes
         return catalogue
 
-    def get_custom_waveform(self, memory_num):
+    def get_custom_waveform(self, memory_num: int) -&gt; np.ndarray:
         &#34;&#34;&#34;Get the waveform currently stored in USER&lt;memory_num&gt;
 
         Parameters
@@ -660,7 +725,12 @@ class FuncGen:
         return np.array([])
 
     def set_custom_waveform(
-        self, waveform, normalise=True, memory_num=0, verify=True, print_progress=True
+        self,
+        waveform: np.ndarray,
+        normalise: bool = True,
+        memory_num: int = 0,
+        verify: bool = True,
+        print_progress: bool = True,
     ):
         &#34;&#34;&#34;Transfer waveform data to edit memory and then user memory.
         NOTE: Will overwrite without warnings
@@ -692,6 +762,11 @@ class FuncGen:
             If the waveform transferred to the instrument is of a different
             length than the waveform supplied
         &#34;&#34;&#34;
+        if not 0 &lt;= memory_num &lt;= self._max_waveform_memory_user_locations:
+            raise ValueError(
+                f&#34;The memory location {memory_num} is not a valid &#34;
+                &#34;memory location for this model&#34;
+            )
         # Check if waveform data is suitable
         if print_progress:
             print(&#34;Check if waveform data is suitable..&#34;, end=&#34; &#34;)
@@ -730,17 +805,21 @@ class FuncGen:
             if print_progress:
                 print(f&#34;Verify waveform USER{memory_num}..&#34;)
             if f&#34;USER{memory_num}&#34; in self.get_waveform_catalogue():
-                self._verify_waveform(
+                verif = self._verify_waveform(
                     waveform,
                     memory_num,
                     normalise=normalise,
                     print_result=print_progress,
                 )
+                if not verif[0]:
+                    raise RuntimeError(
+                        f&#34;USER{memory_num} does not contain the waveform&#34;
+                    )
             else:
-                print(f&#34;(!) USER{memory_num} is empty&#34;)
+                raise RuntimeError(f&#34;USER{memory_num} is empty&#34;)
         return waveform
 
-    def _normalise_to_waveform(self, shape):
+    def _normalise_to_waveform(self, shape: np.ndarray) -&gt; np.ndarray:
         &#34;&#34;&#34;Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
 
@@ -769,7 +848,13 @@ class FuncGen:
         waveform = waveform / normalisation_factor * self._arbitrary_waveform_resolution
         return waveform.astype(np.uint16)
 
-    def _verify_waveform(self, waveform, memory_num, normalise=True, print_result=True):
+    def _verify_waveform(
+        self,
+        waveform: np.ndarray,
+        memory_num: int,
+        normalise: bool = True,
+        print_result: bool = True,
+    ) -&gt; Tuple[bool, np.ndarray, list]:
         &#34;&#34;&#34;Compare a waveform in user memory to argument waveform
 
         Parameters
@@ -825,7 +910,7 @@ class FuncGen:
             )
         return False, instrument_waveform, not_equal
 
-    def _check_arb_waveform_length(self, waveform):
+    def _check_arb_waveform_length(self, waveform: np.ndarray):
         &#34;&#34;&#34;Checks if waveform is within the acceptable length
 
         Parameters
@@ -848,7 +933,7 @@ class FuncGen:
             )
             raise ValueError(msg)
 
-    def _check_arb_waveform_type_and_range(self, waveform):
+    def _check_arb_waveform_type_and_range(self, waveform: np.ndarray):
         &#34;&#34;&#34;Checks if waveform is of int/np.int32 type and within the resolution
         of the function generator
 
@@ -906,7 +991,7 @@ class FuncGenChannel:
     _state_to_str = {&#34;1&#34;: &#34;ON&#34;, &#34;0&#34;: &#34;OFF&#34;, 1: &#34;ON&#34;, 0: &#34;OFF&#34;}
     &#34;&#34;&#34;Dictionary for converting output states to &#34;ON&#34; and &#34;OFF&#34; &#34;&#34;&#34;
 
-    def __init__(self, fgen, channel, impedance):
+    def __init__(self, fgen: FuncGen, channel: int, impedance: str):
         self._fgen = fgen
         self._channel = channel
         self._source = f&#34;SOURce{channel}:&#34;
@@ -919,7 +1004,7 @@ class FuncGenChannel:
         &#34;&#34;&#34;Channel limits for the individual channel, same form as
         `FuncGen.instrument_limits`&#34;&#34;&#34;
 
-    def _impedance_dependent_limit(self, limit_type):
+    def _impedance_dependent_limit(self, limit_type: str) -&gt; bool:
         &#34;&#34;&#34;Check if the limit type is impedance dependent (voltages) or
         not (frequency)
 
@@ -968,7 +1053,9 @@ class FuncGenChannel:
                     # Set the new limit
                     self.set_limit(limit_type, key, new_value, verbose=True)
 
-    def set_limit(self, limit_type, bound, new_value, verbose=False):
+    def set_limit(
+        self, limit_type: str, bound: str, new_value: float, verbose: bool = False
+    ) -&gt; bool:
         &#34;&#34;&#34;Set a limit if the new value is within the instrument limits and are
         self consistent (max larger than min)
 
@@ -1033,46 +1120,46 @@ class FuncGenChannel:
         return False
 
     # Get currently used parameters from function generator
-    def get_output_state(self):
-        &#34;&#34;&#34;Returns &#34;0&#34; for &#34;OFF&#34;, &#34;1&#34; for &#34;ON&#34; &#34;&#34;&#34;
-        return self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;)
+    def get_output_state(self) -&gt; int:
+        &#34;&#34;&#34;Returns 0 for &#34;OFF&#34;, 1 for &#34;ON&#34; &#34;&#34;&#34;
+        return int(self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;))
 
-    def get_function(self):
+    def get_function(self) -&gt; str:
         &#34;&#34;&#34;Returns string of function name&#34;&#34;&#34;
         return self._fgen.query(f&#34;{self._source}FUNCtion:SHAPe?&#34;)
 
-    def get_amplitude(self):
+    def get_amplitude(self) -&gt; float:
         &#34;&#34;&#34;Returns peak-to-peak voltage in volts&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}VOLTage:AMPLitude?&#34;))
 
-    def get_offset(self):
+    def get_offset(self) -&gt; float:
         &#34;&#34;&#34;Returns offset voltage in volts&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}VOLTage:OFFSet?&#34;))
 
-    def get_frequency(self):
+    def get_frequency(self) -&gt; float:
         &#34;&#34;&#34;Returns frequency in Hertz&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}FREQuency?&#34;))
 
     # Get limits set in the channel class
-    def get_frequency_lims(self):
+    def get_frequency_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max frequency limits&#34;&#34;&#34;
         return [self.channel_limits[&#34;frequency lims&#34;][0][key] for key in [&#34;min&#34;, &#34;max&#34;]]
 
-    def get_voltage_lims(self):
+    def get_voltage_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max voltage limits for the current impedance&#34;&#34;&#34;
         return [
             self.channel_limits[&#34;voltage lims&#34;][0][self.impedance][key]
             for key in [&#34;min&#34;, &#34;max&#34;]
         ]
 
-    def get_amplitude_lims(self):
+    def get_amplitude_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max amplitude limits for the current impedance&#34;&#34;&#34;
         return [
             self.channel_limits[&#34;amplitude lims&#34;][0][self.impedance][key]
             for key in [&#34;min&#34;, &#34;max&#34;]
         ]
 
-    def get_settings(self):
+    def get_settings(self) -&gt; dict:
         &#34;&#34;&#34;Get the settings for the channel
 
         Returns
@@ -1101,7 +1188,7 @@ class FuncGenChannel:
         for key, (val, unit) in settings.items():
             print(&#34;{:&gt;{num_char}s} {} {}&#34;.format(key, val, unit, num_char=longest_key))
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: dict):
         &#34;&#34;&#34;Set the settings of the channel with a settings dictionary. Will
         set the outout to OFF before applyign the settings (and turn the
         channel ON or leave it OFF depending on the settings dict)
@@ -1122,7 +1209,7 @@ class FuncGenChannel:
         self.set_frequency(settings[&#34;frequency&#34;][0])
         self.set_output_state(settings[&#34;output&#34;][0])
 
-    def set_output_state(self, state):
+    def set_output_state(self, state: Union[int, str]):
         &#34;&#34;&#34;Enables or diables the output of the channel
 
         Parameters
@@ -1152,15 +1239,15 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def get_output(self):
+    def get_output(self) -&gt; int:
         &#34;&#34;&#34;Wrapper for get_output_state&#34;&#34;&#34;
         return self.get_output_state()
 
-    def set_output(self, state):
+    def set_output(self, state: Union[int, str]):
         &#34;&#34;&#34;Wrapper for set_output_state&#34;&#34;&#34;
         self.set_output_state(state)
 
-    def set_function(self, shape):
+    def set_function(self, shape: str):
         &#34;&#34;&#34;Set the function shape of the output
 
         Parameters
@@ -1196,7 +1283,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_amplitude(self, amplitude):
+    def set_amplitude(self, amplitude: float):
         &#34;&#34;&#34;Set the peak-to-peak amplitude in volts
 
         Parameters
@@ -1266,7 +1353,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_offset(self, offset, unit=&#34;V&#34;):
+    def set_offset(self, offset: float, unit: str = &#34;V&#34;):
         &#34;&#34;&#34;Set offset in volts (or mV, see options)
 
         Parameters
@@ -1314,7 +1401,7 @@ class FuncGenChannel:
                 )
                 raise NotSetError(msg)
 
-    def set_frequency(self, freq, unit=&#34;Hz&#34;):
+    def set_frequency(self, freq: float, unit: str = &#34;Hz&#34;):
         &#34;&#34;&#34;Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
         Parameters
@@ -1369,11 +1456,10 @@ class FuncGenChannel:
                 raise NotSetError(msg)
 
 
-
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ EXAMPLES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 
-def example_basic_control(address):
+def example_basic_control(address: str):
     &#34;&#34;&#34;Example showing how to connect, and the most basic control of the
     instrument parameters&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_basic_control.__doc__)
@@ -1388,7 +1474,7 @@ def example_basic_control(address):
         fgen.print_settings()
 
 
-def example_change_settings(address):
+def example_change_settings(address: str):
     &#34;&#34;&#34;Example showing how to get the current settings of the instrument,
     store them, change a setting and then restore the initial settings&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_change_settings.__doc__)
@@ -1404,7 +1490,7 @@ def example_change_settings(address):
         fgen.print_settings()
 
 
-def example_lock_frequencies(address):
+def example_lock_frequencies(address: str):
     &#34;&#34;&#34;Example showing the frequency being set to 10Hz and then the frequency
     lock enabled, using the frequency at ch1 as the common frequency&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_lock_frequencies.__doc__)
@@ -1413,7 +1499,7 @@ def example_lock_frequencies(address):
         fgen.set_frequency_lock(&#34;ON&#34;, use_channel=1)
 
 
-def example_changing_limits(address):
+def example_changing_limits(address: str):
     &#34;&#34;&#34;Example showing how limits can be read and changed&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_changing_limits.__doc__)
     with FuncGen(address) as fgen:
@@ -1431,7 +1517,10 @@ def example_changing_limits(address):
 
 
 def example_set_and_use_custom_waveform(
-    fgen=None, address=None, channel=1, plot_signal=True
+    fgen: FuncGen = None,
+    address: str = None,
+    channel: int = 1,
+    plot_signal: bool = True,
 ):
     &#34;&#34;&#34;Example showing a waveform being created, transferred to the instrument,
     and applied to a channel&#34;&#34;&#34;
@@ -1487,7 +1576,7 @@ if __name__ == &#34;__main__&#34;:
 <h2 class="section-title" id="header-functions">Functions</h2>
 <dl>
 <dt id="tektronix_func_gen.example_basic_control"><code class="name flex">
-<span>def <span class="ident">example_basic_control</span></span>(<span>address)</span>
+<span>def <span class="ident">example_basic_control</span></span>(<span>address: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Example showing how to connect, and the most basic control of the
@@ -1496,7 +1585,7 @@ instrument parameters</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def example_basic_control(address):
+<pre><code class="python">def example_basic_control(address: str):
     &#34;&#34;&#34;Example showing how to connect, and the most basic control of the
     instrument parameters&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_basic_control.__doc__)
@@ -1512,7 +1601,7 @@ instrument parameters</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.example_change_settings"><code class="name flex">
-<span>def <span class="ident">example_change_settings</span></span>(<span>address)</span>
+<span>def <span class="ident">example_change_settings</span></span>(<span>address: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Example showing how to get the current settings of the instrument,
@@ -1521,7 +1610,7 @@ store them, change a setting and then restore the initial settings</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def example_change_settings(address):
+<pre><code class="python">def example_change_settings(address: str):
     &#34;&#34;&#34;Example showing how to get the current settings of the instrument,
     store them, change a setting and then restore the initial settings&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_change_settings.__doc__)
@@ -1538,7 +1627,7 @@ store them, change a setting and then restore the initial settings</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.example_changing_limits"><code class="name flex">
-<span>def <span class="ident">example_changing_limits</span></span>(<span>address)</span>
+<span>def <span class="ident">example_changing_limits</span></span>(<span>address: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Example showing how limits can be read and changed</p></div>
@@ -1546,7 +1635,7 @@ store them, change a setting and then restore the initial settings</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def example_changing_limits(address):
+<pre><code class="python">def example_changing_limits(address: str):
     &#34;&#34;&#34;Example showing how limits can be read and changed&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_changing_limits.__doc__)
     with FuncGen(address) as fgen:
@@ -1564,7 +1653,7 @@ store them, change a setting and then restore the initial settings</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.example_lock_frequencies"><code class="name flex">
-<span>def <span class="ident">example_lock_frequencies</span></span>(<span>address)</span>
+<span>def <span class="ident">example_lock_frequencies</span></span>(<span>address: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Example showing the frequency being set to 10Hz and then the frequency
@@ -1573,7 +1662,7 @@ lock enabled, using the frequency at ch1 as the common frequency</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def example_lock_frequencies(address):
+<pre><code class="python">def example_lock_frequencies(address: str):
     &#34;&#34;&#34;Example showing the frequency being set to 10Hz and then the frequency
     lock enabled, using the frequency at ch1 as the common frequency&#34;&#34;&#34;
     print(&#34;\n\n&#34;, example_lock_frequencies.__doc__)
@@ -1583,7 +1672,7 @@ lock enabled, using the frequency at ch1 as the common frequency</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.example_set_and_use_custom_waveform"><code class="name flex">
-<span>def <span class="ident">example_set_and_use_custom_waveform</span></span>(<span>fgen=None, address=None, channel=1, plot_signal=True)</span>
+<span>def <span class="ident">example_set_and_use_custom_waveform</span></span>(<span>fgen: <a title="tektronix_func_gen.FuncGen" href="#tektronix_func_gen.FuncGen">FuncGen</a> = None, address: str = None, channel: int = 1, plot_signal: bool = True)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Example showing a waveform being created, transferred to the instrument,
@@ -1593,7 +1682,10 @@ and applied to a channel</p></div>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def example_set_and_use_custom_waveform(
-    fgen=None, address=None, channel=1, plot_signal=True
+    fgen: FuncGen = None,
+    address: str = None,
+    channel: int = 1,
+    plot_signal: bool = True,
 ):
     &#34;&#34;&#34;Example showing a waveform being created, transferred to the instrument,
     and applied to a channel&#34;&#34;&#34;
@@ -1637,7 +1729,7 @@ and applied to a channel</p></div>
 <dl>
 <dt id="tektronix_func_gen.FuncGen"><code class="flex name class">
 <span>class <span class="ident">FuncGen</span></span>
-<span>(</span><span>visa_address, impedance=('highZ', 'highZ'), timeout=5000, verify_param_set=False, override_compatibility=False, verbose=True)</span>
+<span>(</span><span>visa_address: str, impedance: Tuple[str, str] = ('highZ', 'highZ'), timeout: int = 1000, verify_param_set: bool = False, override_compatibility: str = '', verbose: bool = True)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Class for interacting with Tektronix function generator</p>
@@ -1650,17 +1742,18 @@ and applied to a channel</p></div>
 instrument is using 50ohm or high Z cannot be controlled through VISA).
 For example <code>("highZ", "50ohm")</code> for to use high Z for ch1 and
 50 ohm for ch2</dd>
-<dt><strong><code>timeout</code></strong> :&ensp;<code>int</code>, default <code>5000</code></dt>
+<dt><strong><code>timeout</code></strong> :&ensp;<code>int</code>, default <code>1000</code></dt>
 <dd>Timeout in milliseconds of instrument connection</dd>
 <dt><strong><code>verify_param_set</code></strong> :&ensp;<code>bool</code>, default <code>False</code></dt>
 <dd>Verify that a value is successfully set after executing a set function</dd>
 <dt><strong><code>verbose</code></strong> :&ensp;<code>bool</code>, default <code>True</code></dt>
 <dd>Choose whether to print information such as model upon connecting etc</dd>
-<dt><strong><code>override_compatibility</code></strong> :&ensp;<code>bool</code>, default <code>False</code></dt>
+<dt><strong><code>override_compatibility</code></strong> :&ensp;<code>str</code>, default <code>""</code></dt>
 <dd>If the instrument limits for the model connected to are not known
-<code><a title="tektronix_func_gen.NotCompatibleError" href="#tektronix_func_gen.NotCompatibleError">NotCompatibleError</a></code> will be raised. To override and use AFG1022 limits,
-set to <code>True</code>. Note that this might lead to unexpected behaviour for
-custom waveforms and 'MIN'/'MAX' keywords.</dd>
+<code><a title="tektronix_func_gen.NotCompatibleError" href="#tektronix_func_gen.NotCompatibleError">NotCompatibleError</a></code> will be raised. To override and use either of
+AFG1022, AFG1062, or AFG3022 limits, use their respecive model names as
+argument. Note that this might lead to unexpected behaviour for custom
+waveforms and 'MIN'/'MAX' keywords.</dd>
 </dl>
 <h2 id="attributes">Attributes</h2>
 <dl>
@@ -1677,6 +1770,8 @@ e.g. [2, 8192]</dd>
 <dt><strong><code>_arbitrary_waveform_resolution</code></strong> :&ensp;<code>int</code></dt>
 <dd>The vertical resolution of the arbitrary waveform, for instance 14 bit
 =&gt; 2**14-1 = 16383</dd>
+<dt><strong><code>_max_waveform_memory_user_locations</code></strong> :&ensp;<code>int</code></dt>
+<dd>The number of the last user memory location available</dd>
 </dl>
 <h2 id="raises">Raises</h2>
 <dl>
@@ -1703,17 +1798,18 @@ use AFG1022 limits)</dd>
         instrument is using 50ohm or high Z cannot be controlled through VISA).
         For example `(&#34;highZ&#34;, &#34;50ohm&#34;)` for to use high Z for ch1 and
         50 ohm for ch2
-    timeout : int, default 5000
+    timeout : int, default 1000
         Timeout in milliseconds of instrument connection
     verify_param_set : bool, default False
         Verify that a value is successfully set after executing a set function
     verbose : bool, default `True`
         Choose whether to print information such as model upon connecting etc
-    override_compatibility : bool, default `False`
+    override_compatibility : str, default `&#34;&#34;`
         If the instrument limits for the model connected to are not known
-        `NotCompatibleError` will be raised. To override and use AFG1022 limits,
-        set to `True`. Note that this might lead to unexpected behaviour for
-        custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.
+        `NotCompatibleError` will be raised. To override and use either of
+        AFG1022, AFG1062, or AFG3022 limits, use their respecive model names as
+        argument. Note that this might lead to unexpected behaviour for custom
+        waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.
 
     Attributes
     ----------
@@ -1730,6 +1826,8 @@ use AFG1022 limits)</dd>
     _arbitrary_waveform_resolution : int
         The vertical resolution of the arbitrary waveform, for instance 14 bit
         =&gt; 2**14-1 = 16383
+    _max_waveform_memory_user_locations : int
+        The number of the last user memory location available
 
     Raises
     ------
@@ -1740,6 +1838,9 @@ use AFG1022 limits)</dd>
         (Call the class with `override_compatibility=True` to override and
         use AFG1022 limits)
     &#34;&#34;&#34;
+
+    _is_connected = False
+    &#34;&#34;&#34;bool: Keeping track of whether the PYVISA connection has been established&#34;&#34;&#34;
 
     instrument_limits = {}
     &#34;&#34;&#34;dict: Contains the following keys with subdictionaries
@@ -1759,42 +1860,20 @@ use AFG1022 limits)</dd>
 
     def __init__(
         self,
-        visa_address,
-        impedance=(&#34;highZ&#34;,) * 2,
-        timeout=5000,
-        verify_param_set=False,
-        override_compatibility=False,
-        verbose=True,
+        visa_address: str,
+        impedance: Tuple[str, str] = (&#34;highZ&#34;,) * 2,
+        timeout: int = 1000,
+        verify_param_set: bool = False,
+        override_compatibility: str = &#34;&#34;,
+        verbose: bool = True,
     ):
-        self._override_compatibility = override_compatibility
+        self._override_compat = override_compatibility
         self._visa_address = visa_address
-        self._timeout = timeout
         self.verify_param_set = verify_param_set
         &#34;&#34;&#34;bool:  Verify that a value is successfully set after executing a set function&#34;&#34;&#34;
         self.verbose = verbose
         &#34;&#34;&#34;bool: Choose whether to print information such as model upon connecting etc&#34;&#34;&#34;
-        try:
-            rm = pyvisa.ResourceManager()
-            self._inst = rm.open_resource(visa_address)
-        except pyvisa.Error:
-            print(f&#34;\nVisaError: Could not connect to &#39;{visa_address}&#39;&#34;)
-            raise
-        self._inst.timeout = self._timeout
-        # Clear all the event registers and queues used in the instrument
-        # status and event reporting system
-        self.write(&#34;*CLS&#34;)
-        # Get information about the connected device
-        self._id = self.query(&#34;*IDN?&#34;)
-        # Second query might be needed due to unknown reason
-        # (suspecting *CLS does something weird)
-        if self._id == &#34;&#34;:
-            self._id = self.query(&#34;*IDN?&#34;)
-        self._maker, self._model, self._serial = self._id.split(&#34;,&#34;)[:3]
-        if self.verbose:
-            print(
-                &#34;Connected to {} model {}, serial&#34;
-                &#34; {}&#34;.format(self._maker, self._model, self._serial)
-            )
+        self.open(visa_address, timeout)
         self._initialise_model_properties()
         self.channels = (
             self._spawn_channel(1, impedance[0]),
@@ -1816,9 +1895,44 @@ use AFG1022 limits)</dd>
     def __del__(self):
         self.close()
 
+    def open(self, visa_address: str, timeout: int):
+        try:
+            rm = pyvisa.ResourceManager()
+            self._inst = rm.open_resource(visa_address)
+        except pyvisa.Error:
+            print(f&#34;\nVisaError: Could not connect to &#39;{visa_address}&#39;&#34;)
+            raise
+        self._is_connected = True
+        self.timeout = timeout
+        # Clear all the event registers and queues used in the instrument
+        # status and event reporting system
+        self.write(&#34;*CLS&#34;)
+        # Get information about the connected device
+        self._id = self.query(&#34;*IDN?&#34;)
+        # Second query might be needed due to unknown reason
+        if self._id == &#34;&#34;:
+            self._id = self.query(&#34;*IDN?&#34;)
+        self._maker, self._model, self._serial = self._id.split(&#34;,&#34;)[:3]
+        if self.verbose:
+            print(
+                f&#34;Connected to {self._maker} model {self._model}, &#34;
+                f&#34;serial {self._serial}&#34;
+            )
+
     def close(self):
         &#34;&#34;&#34;Close the connection to the instrument&#34;&#34;&#34;
-        self._inst.close()
+        if self._is_connected:
+            self._inst.close()
+            self._is_connected = False
+
+    @property
+    def timeout(self) -&gt; int:
+        &#34;&#34;&#34;The timeout of the PYVISA connection in milliseconds&#34;&#34;&#34;
+        return self._inst.timeout
+
+    @timeout.setter
+    def timeout(self, ms: int):
+        self._inst.timeout = ms
 
     def _initialise_model_properties(self):
         &#34;&#34;&#34;Initialises the limits of what the instrument can handle according
@@ -1830,7 +1944,7 @@ use AFG1022 limits)</dd>
             If the connected model is not necessarily compatible with this
             package, slimits are not known.
         &#34;&#34;&#34;
-        if self._model == &#34;AFG1022&#34; or self._override_compatibility:
+        if np.any([&#34;AFG1022&#34; in a for a in [self._model, self._override_compat]]):
             self.instrument_limits = {
                 &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 25e6}, &#34;Hz&#34;),
                 &#34;voltage lims&#34;: (
@@ -1847,17 +1961,55 @@ use AFG1022 limits)</dd>
             }
             self._arbitrary_waveform_length = [2, 8192]  # min length, max length
             self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 255
+        elif np.any([&#34;AFG1062&#34; in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 60e6}, &#34;Hz&#34;),
+                &#34;voltage lims&#34;: (
+                    {&#34;50ohm&#34;: {&#34;min&#34;: -5, &#34;max&#34;: 5}, &#34;highZ&#34;: {&#34;min&#34;: -10, &#34;max&#34;: 10}},
+                    &#34;V&#34;,
+                ),
+                &#34;amplitude lims&#34;: (
+                    {
+                        &#34;50ohm&#34;: {&#34;min&#34;: 0.001, &#34;max&#34;: 10},
+                        &#34;highZ&#34;: {&#34;min&#34;: 0.002, &#34;max&#34;: 20},
+                    },
+                    &#34;Vpp&#34;,
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 1e6]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 31
+        elif np.any([&#34;AFG3022&#34; in a for a in [self._model, self._override_compat]]):
+            self.instrument_limits = {
+                &#34;frequency lims&#34;: ({&#34;min&#34;: 1e-6, &#34;max&#34;: 25e6}, &#34;Hz&#34;),
+                &#34;voltage lims&#34;: (
+                    {&#34;50ohm&#34;: {&#34;min&#34;: -5, &#34;max&#34;: 5}, &#34;highZ&#34;: {&#34;min&#34;: -10, &#34;max&#34;: 10}},
+                    &#34;V&#34;,
+                ),
+                &#34;amplitude lims&#34;: (
+                    {
+                        &#34;50ohm&#34;: {&#34;min&#34;: 0.01, &#34;max&#34;: 10},
+                        &#34;highZ&#34;: {&#34;min&#34;: 0.02, &#34;max&#34;: 20},
+                    },
+                    &#34;Vpp&#34;,
+                ),
+            }
+            self._arbitrary_waveform_length = [2, 65536]  # min length, max length
+            self._arbitrary_waveform_resolution = 16383  # 14 bit
+            self._max_waveform_memory_user_locations = 4
         else:
             msg = (
-                &#34;Model {} not supported, no limits set!&#34;
-                &#34;\n\tTo use the limits for AFG1022, call the class with &#34;
-                &#34;&#39;override_compatibility=True&#39;&#34;
-                &#34;\n\tNote that this might lead to unexpected behaviour &#34;
-                &#34;for custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.&#34;
+                f&#34;Model {self._model} might not be fully supported!\n&#34;
+                &#34;  The module has been tested with AFG1022, AFG1062, and AFG3022.\n&#34;
+                &#34;  To initiate and use the module as any of these, call the\n&#34;
+                &#34;  class with for instance `override_compatibility=&#39;AFG1022&#39;`\n&#34;
+                &#34;  Note that this might lead to unexpected behaviour\n&#34;
+                &#34;  for custom waveforms and &#39;MIN&#39;/&#39;MAX&#39; keywords.&#34;
             )
             raise NotCompatibleError(msg)
 
-    def write(self, command, custom_err_message=None):
+    def write(self, command: str, custom_err_message: str = None) -&gt; int:
         &#34;&#34;&#34;Write a VISA command to the instrument
 
         Parameters
@@ -1885,7 +2037,7 @@ use AFG1022 limits)</dd>
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return num_bytes
 
-    def query(self, command, custom_err_message=None):
+    def query(self, command: str, custom_err_message: str = None) -&gt; str:
         &#34;&#34;&#34;Query the instrument
 
         Parameters
@@ -1913,7 +2065,7 @@ use AFG1022 limits)</dd>
         self._check_pyvisa_status(command, custom_err_message=custom_err_message)
         return response
 
-    def _check_pyvisa_status(self, command, custom_err_message=None):
+    def _check_pyvisa_status(self, command: str, custom_err_message: str = None):
         &#34;&#34;&#34;Check the last status code of PyVISA
 
         Parameters
@@ -1947,7 +2099,7 @@ use AFG1022 limits)</dd>
             raise RuntimeError(msg)
         return status
 
-    def get_error(self):
+    def get_error(self) -&gt; str:
         &#34;&#34;&#34;Get the contents of the Error/Event queue on the device
 
         Returns
@@ -1957,12 +2109,12 @@ use AFG1022 limits)</dd>
         &#34;&#34;&#34;
         return self.query(&#34;SYSTEM:ERROR:NEXT?&#34;)
 
-    def _spawn_channel(self, channel, impedance):
+    def _spawn_channel(self, channel: int, impedance: str) -&gt; &#34;FuncGenChannel&#34;:
         &#34;&#34;&#34;Wrapper function to create a `FuncGenChannel` object for
         a channel -- see the class docstring&#34;&#34;&#34;
         return FuncGenChannel(self, channel, impedance)
 
-    def get_settings(self):
+    def get_settings(self) -&gt; List[dict]:
         &#34;&#34;&#34;Get dictionaries of the current settings of the two channels
 
         Returns
@@ -1997,7 +2149,7 @@ use AFG1022 limits)</dd>
                 row_format.format(ch1key, str(ch1val), str(ch2val), unit, padd=padding)
             )
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: List[dict]):
         &#34;&#34;&#34;Set the settings of both channels with settings dictionaries
 
         (Each channel is turned off before applying the changes to avoid
@@ -2021,7 +2173,7 @@ use AFG1022 limits)</dd>
         &#34;&#34;&#34;
         self.write(&#34;:PHAS:INIT&#34;, custom_err_message=&#34;syncronise waveforms&#34;)
 
-    def get_frequency_lock(self):
+    def get_frequency_lock(self) -&gt; bool:
         &#34;&#34;&#34;Check if frequency lock is enabled
 
         Returns
@@ -2032,7 +2184,7 @@ use AFG1022 limits)</dd>
         # If one is locked so is the other, so just need to check one
         return int(self.query(&#34;SOURCE1:FREQuency:CONCurrent?&#34;)) == 1
 
-    def set_frequency_lock(self, state, use_channel=1):
+    def set_frequency_lock(self, state: str, use_channel: int = 1):
         &#34;&#34;&#34;Enable the frequency lock to make the two channels have the same
         frequency and phase of their signals, also after adjustments.
 
@@ -2071,7 +2223,7 @@ use AFG1022 limits)</dd>
 
     ## ~~~~~~~~~~~~~~~~~~~~~ CUSTOM WAVEFORM FUNCTIONS ~~~~~~~~~~~~~~~~~~~~~ ##
 
-    def get_waveform_catalogue(self):
+    def get_waveform_catalogue(self) -&gt; List[str]:
         &#34;&#34;&#34;Get list of the waveforms that are in use (not empty)
 
         Returns
@@ -2083,7 +2235,7 @@ use AFG1022 limits)</dd>
         catalogue = [wf[1:-1] for wf in catalogue]  # strip off extra quotes
         return catalogue
 
-    def get_custom_waveform(self, memory_num):
+    def get_custom_waveform(self, memory_num: int) -&gt; np.ndarray:
         &#34;&#34;&#34;Get the waveform currently stored in USER&lt;memory_num&gt;
 
         Parameters
@@ -2122,7 +2274,12 @@ use AFG1022 limits)</dd>
         return np.array([])
 
     def set_custom_waveform(
-        self, waveform, normalise=True, memory_num=0, verify=True, print_progress=True
+        self,
+        waveform: np.ndarray,
+        normalise: bool = True,
+        memory_num: int = 0,
+        verify: bool = True,
+        print_progress: bool = True,
     ):
         &#34;&#34;&#34;Transfer waveform data to edit memory and then user memory.
         NOTE: Will overwrite without warnings
@@ -2154,6 +2311,11 @@ use AFG1022 limits)</dd>
             If the waveform transferred to the instrument is of a different
             length than the waveform supplied
         &#34;&#34;&#34;
+        if not 0 &lt;= memory_num &lt;= self._max_waveform_memory_user_locations:
+            raise ValueError(
+                f&#34;The memory location {memory_num} is not a valid &#34;
+                &#34;memory location for this model&#34;
+            )
         # Check if waveform data is suitable
         if print_progress:
             print(&#34;Check if waveform data is suitable..&#34;, end=&#34; &#34;)
@@ -2192,17 +2354,21 @@ use AFG1022 limits)</dd>
             if print_progress:
                 print(f&#34;Verify waveform USER{memory_num}..&#34;)
             if f&#34;USER{memory_num}&#34; in self.get_waveform_catalogue():
-                self._verify_waveform(
+                verif = self._verify_waveform(
                     waveform,
                     memory_num,
                     normalise=normalise,
                     print_result=print_progress,
                 )
+                if not verif[0]:
+                    raise RuntimeError(
+                        f&#34;USER{memory_num} does not contain the waveform&#34;
+                    )
             else:
-                print(f&#34;(!) USER{memory_num} is empty&#34;)
+                raise RuntimeError(f&#34;USER{memory_num} is empty&#34;)
         return waveform
 
-    def _normalise_to_waveform(self, shape):
+    def _normalise_to_waveform(self, shape: np.ndarray) -&gt; np.ndarray:
         &#34;&#34;&#34;Normalise a shape of any discretisation and range to a waveform that
         can be transmitted to the function generator
 
@@ -2231,7 +2397,13 @@ use AFG1022 limits)</dd>
         waveform = waveform / normalisation_factor * self._arbitrary_waveform_resolution
         return waveform.astype(np.uint16)
 
-    def _verify_waveform(self, waveform, memory_num, normalise=True, print_result=True):
+    def _verify_waveform(
+        self,
+        waveform: np.ndarray,
+        memory_num: int,
+        normalise: bool = True,
+        print_result: bool = True,
+    ) -&gt; Tuple[bool, np.ndarray, list]:
         &#34;&#34;&#34;Compare a waveform in user memory to argument waveform
 
         Parameters
@@ -2287,7 +2459,7 @@ use AFG1022 limits)</dd>
             )
         return False, instrument_waveform, not_equal
 
-    def _check_arb_waveform_length(self, waveform):
+    def _check_arb_waveform_length(self, waveform: np.ndarray):
         &#34;&#34;&#34;Checks if waveform is within the acceptable length
 
         Parameters
@@ -2310,7 +2482,7 @@ use AFG1022 limits)</dd>
             )
             raise ValueError(msg)
 
-    def _check_arb_waveform_type_and_range(self, waveform):
+    def _check_arb_waveform_type_and_range(self, waveform: np.ndarray):
         &#34;&#34;&#34;Checks if waveform is of int/np.int32 type and within the resolution
         of the function generator
 
@@ -2372,6 +2544,19 @@ keys "50ohm" and "highZ" will have subdictionaries with keys
 <dd>
 <div class="desc"><p>tuple of <code><a title="tektronix_func_gen.FuncGenChannel" href="#tektronix_func_gen.FuncGenChannel">FuncGenChannel</a></code>: Objects to control the channels</p></div>
 </dd>
+<dt id="tektronix_func_gen.FuncGen.timeout"><code class="name">var <span class="ident">timeout</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The timeout of the PYVISA connection in milliseconds</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def timeout(self) -&gt; int:
+    &#34;&#34;&#34;The timeout of the PYVISA connection in milliseconds&#34;&#34;&#34;
+    return self._inst.timeout</code></pre>
+</details>
+</dd>
 <dt id="tektronix_func_gen.FuncGen.verbose"><code class="name">var <span class="ident">verbose</span></code></dt>
 <dd>
 <div class="desc"><p>bool: Choose whether to print information such as model upon connecting etc</p></div>
@@ -2395,11 +2580,13 @@ Verify that a value is successfully set after executing a set function</p></div>
 </summary>
 <pre><code class="python">def close(self):
     &#34;&#34;&#34;Close the connection to the instrument&#34;&#34;&#34;
-    self._inst.close()</code></pre>
+    if self._is_connected:
+        self._inst.close()
+        self._is_connected = False</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.get_custom_waveform"><code class="name flex">
-<span>def <span class="ident">get_custom_waveform</span></span>(<span>self, memory_num)</span>
+<span>def <span class="ident">get_custom_waveform</span></span>(<span>self, memory_num: int) ‑> numpy.ndarray</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get the waveform currently stored in USER<memory_num></p>
@@ -2418,7 +2605,7 @@ and empty array if waveform not in use</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_custom_waveform(self, memory_num):
+<pre><code class="python">def get_custom_waveform(self, memory_num: int) -&gt; np.ndarray:
     &#34;&#34;&#34;Get the waveform currently stored in USER&lt;memory_num&gt;
 
     Parameters
@@ -2458,7 +2645,7 @@ and empty array if waveform not in use</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.get_error"><code class="name flex">
-<span>def <span class="ident">get_error</span></span>(<span>self)</span>
+<span>def <span class="ident">get_error</span></span>(<span>self) ‑> str</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get the contents of the Error/Event queue on the device</p>
@@ -2471,7 +2658,7 @@ and empty array if waveform not in use</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_error(self):
+<pre><code class="python">def get_error(self) -&gt; str:
     &#34;&#34;&#34;Get the contents of the Error/Event queue on the device
 
     Returns
@@ -2483,7 +2670,7 @@ and empty array if waveform not in use</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.get_frequency_lock"><code class="name flex">
-<span>def <span class="ident">get_frequency_lock</span></span>(<span>self)</span>
+<span>def <span class="ident">get_frequency_lock</span></span>(<span>self) ‑> bool</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Check if frequency lock is enabled</p>
@@ -2496,7 +2683,7 @@ and empty array if waveform not in use</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_frequency_lock(self):
+<pre><code class="python">def get_frequency_lock(self) -&gt; bool:
     &#34;&#34;&#34;Check if frequency lock is enabled
 
     Returns
@@ -2509,7 +2696,7 @@ and empty array if waveform not in use</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.get_settings"><code class="name flex">
-<span>def <span class="ident">get_settings</span></span>(<span>self)</span>
+<span>def <span class="ident">get_settings</span></span>(<span>self) ‑> List[dict]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get dictionaries of the current settings of the two channels</p>
@@ -2524,7 +2711,7 @@ corresponding values</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_settings(self):
+<pre><code class="python">def get_settings(self) -&gt; List[dict]:
     &#34;&#34;&#34;Get dictionaries of the current settings of the two channels
 
     Returns
@@ -2538,7 +2725,7 @@ corresponding values</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.get_waveform_catalogue"><code class="name flex">
-<span>def <span class="ident">get_waveform_catalogue</span></span>(<span>self)</span>
+<span>def <span class="ident">get_waveform_catalogue</span></span>(<span>self) ‑> List[str]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get list of the waveforms that are in use (not empty)</p>
@@ -2551,7 +2738,7 @@ corresponding values</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_waveform_catalogue(self):
+<pre><code class="python">def get_waveform_catalogue(self) -&gt; List[str]:
     &#34;&#34;&#34;Get list of the waveforms that are in use (not empty)
 
     Returns
@@ -2562,6 +2749,40 @@ corresponding values</dd>
     catalogue = self.query(&#34;DATA:CATalog?&#34;).split(&#34;,&#34;)
     catalogue = [wf[1:-1] for wf in catalogue]  # strip off extra quotes
     return catalogue</code></pre>
+</details>
+</dd>
+<dt id="tektronix_func_gen.FuncGen.open"><code class="name flex">
+<span>def <span class="ident">open</span></span>(<span>self, visa_address: str, timeout: int)</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def open(self, visa_address: str, timeout: int):
+    try:
+        rm = pyvisa.ResourceManager()
+        self._inst = rm.open_resource(visa_address)
+    except pyvisa.Error:
+        print(f&#34;\nVisaError: Could not connect to &#39;{visa_address}&#39;&#34;)
+        raise
+    self._is_connected = True
+    self.timeout = timeout
+    # Clear all the event registers and queues used in the instrument
+    # status and event reporting system
+    self.write(&#34;*CLS&#34;)
+    # Get information about the connected device
+    self._id = self.query(&#34;*IDN?&#34;)
+    # Second query might be needed due to unknown reason
+    if self._id == &#34;&#34;:
+        self._id = self.query(&#34;*IDN?&#34;)
+    self._maker, self._model, self._serial = self._id.split(&#34;,&#34;)[:3]
+    if self.verbose:
+        print(
+            f&#34;Connected to {self._maker} model {self._model}, &#34;
+            f&#34;serial {self._serial}&#34;
+        )</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.print_settings"><code class="name flex">
@@ -2598,7 +2819,7 @@ corresponding values</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.query"><code class="name flex">
-<span>def <span class="ident">query</span></span>(<span>self, command, custom_err_message=None)</span>
+<span>def <span class="ident">query</span></span>(<span>self, command: str, custom_err_message: str = None) ‑> str</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Query the instrument</p>
@@ -2627,7 +2848,7 @@ pyvisa returned StatusCode .."</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def query(self, command, custom_err_message=None):
+<pre><code class="python">def query(self, command: str, custom_err_message: str = None) -&gt; str:
     &#34;&#34;&#34;Query the instrument
 
     Parameters
@@ -2657,7 +2878,7 @@ pyvisa returned StatusCode .."</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.set_custom_waveform"><code class="name flex">
-<span>def <span class="ident">set_custom_waveform</span></span>(<span>self, waveform, normalise=True, memory_num=0, verify=True, print_progress=True)</span>
+<span>def <span class="ident">set_custom_waveform</span></span>(<span>self, waveform: numpy.ndarray, normalise: bool = True, memory_num: int = 0, verify: bool = True, print_progress: bool = True)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Transfer waveform data to edit memory and then user memory.
@@ -2695,7 +2916,12 @@ length than the waveform supplied</dd>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def set_custom_waveform(
-    self, waveform, normalise=True, memory_num=0, verify=True, print_progress=True
+    self,
+    waveform: np.ndarray,
+    normalise: bool = True,
+    memory_num: int = 0,
+    verify: bool = True,
+    print_progress: bool = True,
 ):
     &#34;&#34;&#34;Transfer waveform data to edit memory and then user memory.
     NOTE: Will overwrite without warnings
@@ -2727,6 +2953,11 @@ length than the waveform supplied</dd>
         If the waveform transferred to the instrument is of a different
         length than the waveform supplied
     &#34;&#34;&#34;
+    if not 0 &lt;= memory_num &lt;= self._max_waveform_memory_user_locations:
+        raise ValueError(
+            f&#34;The memory location {memory_num} is not a valid &#34;
+            &#34;memory location for this model&#34;
+        )
     # Check if waveform data is suitable
     if print_progress:
         print(&#34;Check if waveform data is suitable..&#34;, end=&#34; &#34;)
@@ -2765,19 +2996,23 @@ length than the waveform supplied</dd>
         if print_progress:
             print(f&#34;Verify waveform USER{memory_num}..&#34;)
         if f&#34;USER{memory_num}&#34; in self.get_waveform_catalogue():
-            self._verify_waveform(
+            verif = self._verify_waveform(
                 waveform,
                 memory_num,
                 normalise=normalise,
                 print_result=print_progress,
             )
+            if not verif[0]:
+                raise RuntimeError(
+                    f&#34;USER{memory_num} does not contain the waveform&#34;
+                )
         else:
-            print(f&#34;(!) USER{memory_num} is empty&#34;)
+            raise RuntimeError(f&#34;USER{memory_num} is empty&#34;)
     return waveform</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.set_frequency_lock"><code class="name flex">
-<span>def <span class="ident">set_frequency_lock</span></span>(<span>self, state, use_channel=1)</span>
+<span>def <span class="ident">set_frequency_lock</span></span>(<span>self, state: str, use_channel: int = 1)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Enable the frequency lock to make the two channels have the same
@@ -2795,7 +3030,7 @@ shall be used as the common freqency</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_frequency_lock(self, state, use_channel=1):
+<pre><code class="python">def set_frequency_lock(self, state: str, use_channel: int = 1):
     &#34;&#34;&#34;Enable the frequency lock to make the two channels have the same
     frequency and phase of their signals, also after adjustments.
 
@@ -2829,7 +3064,7 @@ shall be used as the common freqency</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.set_settings"><code class="name flex">
-<span>def <span class="ident">set_settings</span></span>(<span>self, settings)</span>
+<span>def <span class="ident">set_settings</span></span>(<span>self, settings: List[dict])</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set the settings of both channels with settings dictionaries</p>
@@ -2844,7 +3079,7 @@ have keys output, function, amplitude, offset, and frequency</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_settings(self, settings):
+<pre><code class="python">def set_settings(self, settings: List[dict]):
     &#34;&#34;&#34;Set the settings of both channels with settings dictionaries
 
     (Each channel is turned off before applying the changes to avoid
@@ -2898,7 +3133,7 @@ user interface of the instrument)</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGen.write"><code class="name flex">
-<span>def <span class="ident">write</span></span>(<span>self, command, custom_err_message=None)</span>
+<span>def <span class="ident">write</span></span>(<span>self, command: str, custom_err_message: str = None) ‑> int</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Write a VISA command to the instrument</p>
@@ -2927,7 +3162,7 @@ pyvisa returned StatusCode .."</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def write(self, command, custom_err_message=None):
+<pre><code class="python">def write(self, command: str, custom_err_message: str = None) -&gt; int:
     &#34;&#34;&#34;Write a VISA command to the instrument
 
     Parameters
@@ -2960,7 +3195,7 @@ pyvisa returned StatusCode .."</dd>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel"><code class="flex name class">
 <span>class <span class="ident">FuncGenChannel</span></span>
-<span>(</span><span>fgen, channel, impedance)</span>
+<span>(</span><span>fgen: <a title="tektronix_func_gen.FuncGen" href="#tektronix_func_gen.FuncGen">FuncGen</a>, channel: int, impedance: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Class for controlling a channel on a function generator object</p>
@@ -3013,7 +3248,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
     _state_to_str = {&#34;1&#34;: &#34;ON&#34;, &#34;0&#34;: &#34;OFF&#34;, 1: &#34;ON&#34;, 0: &#34;OFF&#34;}
     &#34;&#34;&#34;Dictionary for converting output states to &#34;ON&#34; and &#34;OFF&#34; &#34;&#34;&#34;
 
-    def __init__(self, fgen, channel, impedance):
+    def __init__(self, fgen: FuncGen, channel: int, impedance: str):
         self._fgen = fgen
         self._channel = channel
         self._source = f&#34;SOURce{channel}:&#34;
@@ -3026,7 +3261,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
         &#34;&#34;&#34;Channel limits for the individual channel, same form as
         `FuncGen.instrument_limits`&#34;&#34;&#34;
 
-    def _impedance_dependent_limit(self, limit_type):
+    def _impedance_dependent_limit(self, limit_type: str) -&gt; bool:
         &#34;&#34;&#34;Check if the limit type is impedance dependent (voltages) or
         not (frequency)
 
@@ -3075,7 +3310,9 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
                     # Set the new limit
                     self.set_limit(limit_type, key, new_value, verbose=True)
 
-    def set_limit(self, limit_type, bound, new_value, verbose=False):
+    def set_limit(
+        self, limit_type: str, bound: str, new_value: float, verbose: bool = False
+    ) -&gt; bool:
         &#34;&#34;&#34;Set a limit if the new value is within the instrument limits and are
         self consistent (max larger than min)
 
@@ -3140,46 +3377,46 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
         return False
 
     # Get currently used parameters from function generator
-    def get_output_state(self):
-        &#34;&#34;&#34;Returns &#34;0&#34; for &#34;OFF&#34;, &#34;1&#34; for &#34;ON&#34; &#34;&#34;&#34;
-        return self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;)
+    def get_output_state(self) -&gt; int:
+        &#34;&#34;&#34;Returns 0 for &#34;OFF&#34;, 1 for &#34;ON&#34; &#34;&#34;&#34;
+        return int(self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;))
 
-    def get_function(self):
+    def get_function(self) -&gt; str:
         &#34;&#34;&#34;Returns string of function name&#34;&#34;&#34;
         return self._fgen.query(f&#34;{self._source}FUNCtion:SHAPe?&#34;)
 
-    def get_amplitude(self):
+    def get_amplitude(self) -&gt; float:
         &#34;&#34;&#34;Returns peak-to-peak voltage in volts&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}VOLTage:AMPLitude?&#34;))
 
-    def get_offset(self):
+    def get_offset(self) -&gt; float:
         &#34;&#34;&#34;Returns offset voltage in volts&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}VOLTage:OFFSet?&#34;))
 
-    def get_frequency(self):
+    def get_frequency(self) -&gt; float:
         &#34;&#34;&#34;Returns frequency in Hertz&#34;&#34;&#34;
         return float(self._fgen.query(f&#34;{self._source}FREQuency?&#34;))
 
     # Get limits set in the channel class
-    def get_frequency_lims(self):
+    def get_frequency_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max frequency limits&#34;&#34;&#34;
         return [self.channel_limits[&#34;frequency lims&#34;][0][key] for key in [&#34;min&#34;, &#34;max&#34;]]
 
-    def get_voltage_lims(self):
+    def get_voltage_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max voltage limits for the current impedance&#34;&#34;&#34;
         return [
             self.channel_limits[&#34;voltage lims&#34;][0][self.impedance][key]
             for key in [&#34;min&#34;, &#34;max&#34;]
         ]
 
-    def get_amplitude_lims(self):
+    def get_amplitude_lims(self) -&gt; List[float]:
         &#34;&#34;&#34;Returns list of min and max amplitude limits for the current impedance&#34;&#34;&#34;
         return [
             self.channel_limits[&#34;amplitude lims&#34;][0][self.impedance][key]
             for key in [&#34;min&#34;, &#34;max&#34;]
         ]
 
-    def get_settings(self):
+    def get_settings(self) -&gt; dict:
         &#34;&#34;&#34;Get the settings for the channel
 
         Returns
@@ -3208,7 +3445,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
         for key, (val, unit) in settings.items():
             print(&#34;{:&gt;{num_char}s} {} {}&#34;.format(key, val, unit, num_char=longest_key))
 
-    def set_settings(self, settings):
+    def set_settings(self, settings: dict):
         &#34;&#34;&#34;Set the settings of the channel with a settings dictionary. Will
         set the outout to OFF before applyign the settings (and turn the
         channel ON or leave it OFF depending on the settings dict)
@@ -3229,7 +3466,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
         self.set_frequency(settings[&#34;frequency&#34;][0])
         self.set_output_state(settings[&#34;output&#34;][0])
 
-    def set_output_state(self, state):
+    def set_output_state(self, state: Union[int, str]):
         &#34;&#34;&#34;Enables or diables the output of the channel
 
         Parameters
@@ -3259,15 +3496,15 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
                 )
                 raise NotSetError(msg)
 
-    def get_output(self):
+    def get_output(self) -&gt; int:
         &#34;&#34;&#34;Wrapper for get_output_state&#34;&#34;&#34;
         return self.get_output_state()
 
-    def set_output(self, state):
+    def set_output(self, state: Union[int, str]):
         &#34;&#34;&#34;Wrapper for set_output_state&#34;&#34;&#34;
         self.set_output_state(state)
 
-    def set_function(self, shape):
+    def set_function(self, shape: str):
         &#34;&#34;&#34;Set the function shape of the output
 
         Parameters
@@ -3303,7 +3540,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
                 )
                 raise NotSetError(msg)
 
-    def set_amplitude(self, amplitude):
+    def set_amplitude(self, amplitude: float):
         &#34;&#34;&#34;Set the peak-to-peak amplitude in volts
 
         Parameters
@@ -3373,7 +3610,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
                 )
                 raise NotSetError(msg)
 
-    def set_offset(self, offset, unit=&#34;V&#34;):
+    def set_offset(self, offset: float, unit: str = &#34;V&#34;):
         &#34;&#34;&#34;Set offset in volts (or mV, see options)
 
         Parameters
@@ -3421,7 +3658,7 @@ instrument is using 50ohm or high Z cannot be controlled through VISA)</dd>
                 )
                 raise NotSetError(msg)
 
-    def set_frequency(self, freq, unit=&#34;Hz&#34;):
+    def set_frequency(self, freq: float, unit: str = &#34;Hz&#34;):
         &#34;&#34;&#34;Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
         Parameters
@@ -3492,7 +3729,7 @@ controlled through VISA)</p></div>
 <h3>Methods</h3>
 <dl>
 <dt id="tektronix_func_gen.FuncGenChannel.get_amplitude"><code class="name flex">
-<span>def <span class="ident">get_amplitude</span></span>(<span>self)</span>
+<span>def <span class="ident">get_amplitude</span></span>(<span>self) ‑> float</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns peak-to-peak voltage in volts</p></div>
@@ -3500,13 +3737,13 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_amplitude(self):
+<pre><code class="python">def get_amplitude(self) -&gt; float:
     &#34;&#34;&#34;Returns peak-to-peak voltage in volts&#34;&#34;&#34;
     return float(self._fgen.query(f&#34;{self._source}VOLTage:AMPLitude?&#34;))</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_amplitude_lims"><code class="name flex">
-<span>def <span class="ident">get_amplitude_lims</span></span>(<span>self)</span>
+<span>def <span class="ident">get_amplitude_lims</span></span>(<span>self) ‑> List[float]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns list of min and max amplitude limits for the current impedance</p></div>
@@ -3514,7 +3751,7 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_amplitude_lims(self):
+<pre><code class="python">def get_amplitude_lims(self) -&gt; List[float]:
     &#34;&#34;&#34;Returns list of min and max amplitude limits for the current impedance&#34;&#34;&#34;
     return [
         self.channel_limits[&#34;amplitude lims&#34;][0][self.impedance][key]
@@ -3523,7 +3760,7 @@ controlled through VISA)</p></div>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_frequency"><code class="name flex">
-<span>def <span class="ident">get_frequency</span></span>(<span>self)</span>
+<span>def <span class="ident">get_frequency</span></span>(<span>self) ‑> float</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns frequency in Hertz</p></div>
@@ -3531,13 +3768,13 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_frequency(self):
+<pre><code class="python">def get_frequency(self) -&gt; float:
     &#34;&#34;&#34;Returns frequency in Hertz&#34;&#34;&#34;
     return float(self._fgen.query(f&#34;{self._source}FREQuency?&#34;))</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_frequency_lims"><code class="name flex">
-<span>def <span class="ident">get_frequency_lims</span></span>(<span>self)</span>
+<span>def <span class="ident">get_frequency_lims</span></span>(<span>self) ‑> List[float]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns list of min and max frequency limits</p></div>
@@ -3545,13 +3782,13 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_frequency_lims(self):
+<pre><code class="python">def get_frequency_lims(self) -&gt; List[float]:
     &#34;&#34;&#34;Returns list of min and max frequency limits&#34;&#34;&#34;
     return [self.channel_limits[&#34;frequency lims&#34;][0][key] for key in [&#34;min&#34;, &#34;max&#34;]]</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_function"><code class="name flex">
-<span>def <span class="ident">get_function</span></span>(<span>self)</span>
+<span>def <span class="ident">get_function</span></span>(<span>self) ‑> str</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns string of function name</p></div>
@@ -3559,13 +3796,13 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_function(self):
+<pre><code class="python">def get_function(self) -&gt; str:
     &#34;&#34;&#34;Returns string of function name&#34;&#34;&#34;
     return self._fgen.query(f&#34;{self._source}FUNCtion:SHAPe?&#34;)</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_offset"><code class="name flex">
-<span>def <span class="ident">get_offset</span></span>(<span>self)</span>
+<span>def <span class="ident">get_offset</span></span>(<span>self) ‑> float</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns offset voltage in volts</p></div>
@@ -3573,13 +3810,13 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_offset(self):
+<pre><code class="python">def get_offset(self) -&gt; float:
     &#34;&#34;&#34;Returns offset voltage in volts&#34;&#34;&#34;
     return float(self._fgen.query(f&#34;{self._source}VOLTage:OFFSet?&#34;))</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_output"><code class="name flex">
-<span>def <span class="ident">get_output</span></span>(<span>self)</span>
+<span>def <span class="ident">get_output</span></span>(<span>self) ‑> int</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Wrapper for get_output_state</p></div>
@@ -3587,27 +3824,27 @@ controlled through VISA)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_output(self):
+<pre><code class="python">def get_output(self) -&gt; int:
     &#34;&#34;&#34;Wrapper for get_output_state&#34;&#34;&#34;
     return self.get_output_state()</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_output_state"><code class="name flex">
-<span>def <span class="ident">get_output_state</span></span>(<span>self)</span>
+<span>def <span class="ident">get_output_state</span></span>(<span>self) ‑> int</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Returns "0" for "OFF", "1" for "ON"</p></div>
+<div class="desc"><p>Returns 0 for "OFF", 1 for "ON"</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_output_state(self):
-    &#34;&#34;&#34;Returns &#34;0&#34; for &#34;OFF&#34;, &#34;1&#34; for &#34;ON&#34; &#34;&#34;&#34;
-    return self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;)</code></pre>
+<pre><code class="python">def get_output_state(self) -&gt; int:
+    &#34;&#34;&#34;Returns 0 for &#34;OFF&#34;, 1 for &#34;ON&#34; &#34;&#34;&#34;
+    return int(self._fgen.query(f&#34;OUTPut{self._channel}:STATe?&#34;))</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_settings"><code class="name flex">
-<span>def <span class="ident">get_settings</span></span>(<span>self)</span>
+<span>def <span class="ident">get_settings</span></span>(<span>self) ‑> dict</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get the settings for the channel</p>
@@ -3622,7 +3859,7 @@ the corresponding return and unit</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_settings(self):
+<pre><code class="python">def get_settings(self) -&gt; dict:
     &#34;&#34;&#34;Get the settings for the channel
 
     Returns
@@ -3642,7 +3879,7 @@ the corresponding return and unit</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.get_voltage_lims"><code class="name flex">
-<span>def <span class="ident">get_voltage_lims</span></span>(<span>self)</span>
+<span>def <span class="ident">get_voltage_lims</span></span>(<span>self) ‑> List[float]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns list of min and max voltage limits for the current impedance</p></div>
@@ -3650,7 +3887,7 @@ the corresponding return and unit</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_voltage_lims(self):
+<pre><code class="python">def get_voltage_lims(self) -&gt; List[float]:
     &#34;&#34;&#34;Returns list of min and max voltage limits for the current impedance&#34;&#34;&#34;
     return [
         self.channel_limits[&#34;voltage lims&#34;][0][self.impedance][key]
@@ -3681,7 +3918,7 @@ to use the <code><a title="tektronix_func_gen.FuncGen.print_settings" href="#tek
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_amplitude"><code class="name flex">
-<span>def <span class="ident">set_amplitude</span></span>(<span>self, amplitude)</span>
+<span>def <span class="ident">set_amplitude</span></span>(<span>self, amplitude: float)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set the peak-to-peak amplitude in volts</p>
@@ -3702,7 +3939,7 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_amplitude(self, amplitude):
+<pre><code class="python">def set_amplitude(self, amplitude: float):
     &#34;&#34;&#34;Set the peak-to-peak amplitude in volts
 
     Parameters
@@ -3774,7 +4011,7 @@ get function</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_frequency"><code class="name flex">
-<span>def <span class="ident">set_frequency</span></span>(<span>self, freq, unit='Hz')</span>
+<span>def <span class="ident">set_frequency</span></span>(<span>self, freq: float, unit: str = 'Hz')</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set the frequency in Hertz (or mHz, kHz, MHz, see options)</p>
@@ -3796,7 +4033,7 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_frequency(self, freq, unit=&#34;Hz&#34;):
+<pre><code class="python">def set_frequency(self, freq: float, unit: str = &#34;Hz&#34;):
     &#34;&#34;&#34;Set the frequency in Hertz (or mHz, kHz, MHz, see options)
 
     Parameters
@@ -3852,7 +4089,7 @@ get function</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_function"><code class="name flex">
-<span>def <span class="ident">set_function</span></span>(<span>self, shape)</span>
+<span>def <span class="ident">set_function</span></span>(<span>self, shape: str)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set the function shape of the output</p>
@@ -3879,7 +4116,7 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_function(self, shape):
+<pre><code class="python">def set_function(self, shape: str):
     &#34;&#34;&#34;Set the function shape of the output
 
     Parameters
@@ -3917,7 +4154,7 @@ get function</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_limit"><code class="name flex">
-<span>def <span class="ident">set_limit</span></span>(<span>self, limit_type, bound, new_value, verbose=False)</span>
+<span>def <span class="ident">set_limit</span></span>(<span>self, limit_type: str, bound: str, new_value: float, verbose: bool = False) ‑> bool</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set a limit if the new value is within the instrument limits and are
@@ -3941,7 +4178,9 @@ limit was not set</p>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_limit(self, limit_type, bound, new_value, verbose=False):
+<pre><code class="python">def set_limit(
+    self, limit_type: str, bound: str, new_value: float, verbose: bool = False
+) -&gt; bool:
     &#34;&#34;&#34;Set a limit if the new value is within the instrument limits and are
     self consistent (max larger than min)
 
@@ -4007,7 +4246,7 @@ limit was not set</p>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_offset"><code class="name flex">
-<span>def <span class="ident">set_offset</span></span>(<span>self, offset, unit='V')</span>
+<span>def <span class="ident">set_offset</span></span>(<span>self, offset: float, unit: str = 'V')</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set offset in volts (or mV, see options)</p>
@@ -4029,7 +4268,7 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_offset(self, offset, unit=&#34;V&#34;):
+<pre><code class="python">def set_offset(self, offset: float, unit: str = &#34;V&#34;):
     &#34;&#34;&#34;Set offset in volts (or mV, see options)
 
     Parameters
@@ -4079,7 +4318,7 @@ get function</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_output"><code class="name flex">
-<span>def <span class="ident">set_output</span></span>(<span>self, state)</span>
+<span>def <span class="ident">set_output</span></span>(<span>self, state: Union[int, str])</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Wrapper for set_output_state</p></div>
@@ -4087,13 +4326,13 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_output(self, state):
+<pre><code class="python">def set_output(self, state: Union[int, str]):
     &#34;&#34;&#34;Wrapper for set_output_state&#34;&#34;&#34;
     self.set_output_state(state)</code></pre>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_output_state"><code class="name flex">
-<span>def <span class="ident">set_output_state</span></span>(<span>self, state)</span>
+<span>def <span class="ident">set_output_state</span></span>(<span>self, state: Union[int, str])</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Enables or diables the output of the channel</p>
@@ -4114,7 +4353,7 @@ get function</dd>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_output_state(self, state):
+<pre><code class="python">def set_output_state(self, state: Union[int, str]):
     &#34;&#34;&#34;Enables or diables the output of the channel
 
     Parameters
@@ -4146,7 +4385,7 @@ get function</dd>
 </details>
 </dd>
 <dt id="tektronix_func_gen.FuncGenChannel.set_settings"><code class="name flex">
-<span>def <span class="ident">set_settings</span></span>(<span>self, settings)</span>
+<span>def <span class="ident">set_settings</span></span>(<span>self, settings: dict)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Set the settings of the channel with a settings dictionary. Will
@@ -4160,7 +4399,7 @@ keys output, function, amplitude, offset, and frequency</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_settings(self, settings):
+<pre><code class="python">def set_settings(self, settings: dict):
     &#34;&#34;&#34;Set the settings of the channel with a settings dictionary. Will
     set the outout to OFF before applyign the settings (and turn the
     channel ON or leave it OFF depending on the settings dict)
@@ -4315,6 +4554,7 @@ through a series of prompts</p></div>
 <li><code><a title="tektronix_func_gen.FuncGen.get_settings" href="#tektronix_func_gen.FuncGen.get_settings">get_settings</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.get_waveform_catalogue" href="#tektronix_func_gen.FuncGen.get_waveform_catalogue">get_waveform_catalogue</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.instrument_limits" href="#tektronix_func_gen.FuncGen.instrument_limits">instrument_limits</a></code></li>
+<li><code><a title="tektronix_func_gen.FuncGen.open" href="#tektronix_func_gen.FuncGen.open">open</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.print_settings" href="#tektronix_func_gen.FuncGen.print_settings">print_settings</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.query" href="#tektronix_func_gen.FuncGen.query">query</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.set_custom_waveform" href="#tektronix_func_gen.FuncGen.set_custom_waveform">set_custom_waveform</a></code></li>
@@ -4322,6 +4562,7 @@ through a series of prompts</p></div>
 <li><code><a title="tektronix_func_gen.FuncGen.set_settings" href="#tektronix_func_gen.FuncGen.set_settings">set_settings</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.software_trig" href="#tektronix_func_gen.FuncGen.software_trig">software_trig</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.syncronise_waveforms" href="#tektronix_func_gen.FuncGen.syncronise_waveforms">syncronise_waveforms</a></code></li>
+<li><code><a title="tektronix_func_gen.FuncGen.timeout" href="#tektronix_func_gen.FuncGen.timeout">timeout</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.verbose" href="#tektronix_func_gen.FuncGen.verbose">verbose</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.verify_param_set" href="#tektronix_func_gen.FuncGen.verify_param_set">verify_param_set</a></code></li>
 <li><code><a title="tektronix_func_gen.FuncGen.write" href="#tektronix_func_gen.FuncGen.write">write</a></code></li>

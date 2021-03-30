@@ -23,9 +23,12 @@ of this module).
   Call Monitor application that comes with TekVISA is open and capturing
   (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)).
   NI-VISA does not have this issue.
-- The offset of the built-in DC (flat) function cannot be controlled. A
+- The offset of the built-in DC (flat) function cannot be controlled directly. A
   workaround is to transfer a flat custom waveform to a memory location,
   see [Flat function offset control](#flat-function-offset-control) in this readme.
+- The frequency limits can in practice be stricter than what is set by the module,
+  as the module is using the limits for a sine, where as other functions, such as
+  ramp might have lower limit
 
 ### Installation
 
