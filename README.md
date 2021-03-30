@@ -3,6 +3,11 @@
 [![CodeFactor Grade](https://img.shields.io/codefactor/grade/github/asvela/tektronix-func-gen?style=flat-square)](https://www.codefactor.io/repository/github/asvela/tektronix-func-gen)
 [![MIT License](https://img.shields.io/github/license/asvela/dlc-control?style=flat-square)](https://github.com/asvela/dlc-control/blob/main/LICENSE)
 
+Provides basic control of AFG1000 and AFG3000 series Tektronix Arbitrary Function 
+Generators, possibly also others. This includes setting basic settings such as
+selecting functions, transferring or selecting custom waveforms, amplitude and offset
+control, phase syncronisation and frequency locking.
+
 API documentation available [here](https://asvela.github.io/tektronix-func-gen/),
 or in the repository [docs/index.html](docs/index.html). (To build the documentation
 yourself use [pdoc3](https://pdoc3.github.io/pdoc/) and run
@@ -18,9 +23,12 @@ of this module).
   Call Monitor application that comes with TekVISA is open and capturing
   (see issue [#1](https://github.com/asvela/tektronix-func-gen/issues/1)).
   NI-VISA does not have this issue.
-- The offset of the built-in DC (flat) function cannot be controlled. A
+- The offset of the built-in DC (flat) function cannot be controlled directly. A
   workaround is to transfer a flat custom waveform to a memory location,
   see [Flat function offset control](#flat-function-offset-control) in this readme.
+- The frequency limits can in practice be stricter than what is set by the module,
+  as the module is using the limits for a sine, where as other functions, such as
+  ramp might have lower limit
 
 ### Installation
 
